@@ -380,11 +380,14 @@ Result (`example_out/tables/read_category_by_sample.tsv`, % of unclassified read
 S3 has no classifier output, so its "bacterial" reads stay in the unclassified pool; with no bacterial
 reference given they end up as unclassified contigs or not assembled.
 
-**Real data.** On cactus (*O. cochenillifera*) RNA-seq reads that did not align to the genome (3 samples x
-200,000 pairs, no classifier output, host = the cactus genome, references from `download-refs`), the
-pipeline assigned 93.1-95.7 % of the reads to viruses: 88.1 % of all reads to contigs closest to a
-*Potexvirus* sp. genome (NC_040842.1, 80.7 % nucleotide identity, i.e. a related but different strain) and
-6.4 % to Cactus carlavirus 1 (89.1 % identity); 0.1-0.4 % were host and 4.0-5.2 % were not assembled.
+**Real data (2026-11-17).** Cactus (*O. cochenillifera*) RNA-seq read pairs that did not align to the
+cactus genome (3 samples x 200,000 pairs) were classified with Kraken2 2.1.3 and the Standard-8 database
+(k2_standard_08_GB_20261022): only 0.5-1.3 % were classified. `unclassified-meta run --mode rna` with the
+cactus genome as host and the `download-refs` references then assigned **93.3-95.7 %** of the
+unclassified pairs to viruses: 88.9 % of all pairs to one contig closest to a *Potexvirus* sp. genome
+(NC_040842.1, 80.7 % nucleotide identity, so a related but different virus) and 5.8 % to Cactus
+carlavirus 1 (89.0 % identity). Host 0.1-0.4 %, plant protein 0.2-0.9 %, not assembled 3.9-4.8 %. The
+whole run took 2 min 53 s with a peak of 6.0 GB.
 
 Open `example_out/report.html` in a browser. Virus A is found by BLASTN (its genome is in the reference);
 virus B has no similar genome in the reference, only a similar protein, and is found by DIAMOND blastx.
