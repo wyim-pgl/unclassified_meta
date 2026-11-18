@@ -223,6 +223,7 @@ class Classifier:
                     for q, h in parse_blast(self._diamond(rest, refs["virus_protein"], "virus_protein", t["evalue"]),
                                             max_evalue=t["evalue"]).items():
                         hits.setdefault(q, {**h, "method": "diamond_blastx"})
+                self._drop_cellular_homologs(hits, query)
             if refs.get("extra_virus_fasta") and t.get("tblastx_extra"):
                 rest = self._subset(query, set(hits), "virus_tblastx_query.fa")
                 if rest:
@@ -264,6 +265,24 @@ class Classifier:
             return [("protein", {q: {**h, "method": "diamond_blastx"}
                                  for q, h in parse_blast(out, max_evalue=th["protein"]["evalue"]).items()})]
         raise ValueError(name)
+
+    def _drop_cellular_homologs(self, hits: dict[str, dict], query: Path) -> None:
+        """Viral protein sets (giant viruses especially) carry homologs of cellular genes. A contig assigned to a
+        virus only by DIAMOND keeps the label when its viral bitscore beats its best plant-protein bitscore."""
+        cand = {q for q, h in hits.items() if h.get("method") == "diamond_blastx"}
+        dbs = [d for d in (self.cfg["references"].get("protein"), self.cfg["references"].get("host_proteome")) if d]
+        if not cand or not dbs:
+            return
+        sub = self.work / "virus_blastx_hits.fa"
+        write_fasta([(n, s) for n, s in read_fasta(query) if n in cand], sub)
+        out = self._diamond(sub, dbs[0] if len(dbs) == 1 else dbs, "virus_vs_plant",
+                            self.cfg["thresholds"]["protein"]["evalue"])
+        plant = parse_blast(out, max_evalue=self.cfg["thresholds"]["protein"]["evalue"])
+        for q in cand:
+            if q in plant and plant[q]["bitscore"] >= hits[q]["bitscore"]:
+                log.info("%s: plant protein %s (bits %.0f) beats viral %s (bits %.0f); not called virus",
+                         q, plant[q]["hit"], plant[q]["bitscore"], hits[q]["hit"], hits[q]["bitscore"])
+                del hits[q]
 
     def _subset(self, fasta: Path, exclude: set[str], name: str) -> Path | None:
         recs = [(n, s) for n, s in read_fasta(fasta) if n not in exclude]
