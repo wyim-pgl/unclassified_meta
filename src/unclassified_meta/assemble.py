@@ -13,11 +13,15 @@ from .runner import StepError, require
 
 log = logging.getLogger("unclassified_meta")
 
-# Rough peak resident memory: BASE_GB + PER_MILLION_GB * (million read pairs or single reads in the pool).
-# Measured with /usr/bin/time -v on synthetic and real (Opuntia RNA-seq) inputs; see README "Memory and time".
+# Rough, deliberately conservative peak resident memory: BASE_GB + PER_MILLION_GB * (million read pairs or single
+# reads in the pool). Measured with /usr/bin/time -v on cactus RNA-seq reads without a genome alignment
+# (16 threads, 2026-11-17): rnaSPAdes 5.3 / 5.6 / 6.2 / 10.8 / 10.8 GB and MEGAHIT 0.29 / 0.32 / 0.36 / 0.48 /
+# 0.56 GB for 0.25 / 0.5 / 1 / 2 / 4 million pairs. Peak memory follows the number of distinct k-mers, so
+# diverse metagenomes need more than these virus-dominated reads; the per-million terms leave room for that.
+# metaSPAdes was not measured; its values follow the SPAdes manual's guidance that it needs more than rnaSPAdes.
 MEMORY_MODEL = {
-    "rnaspades": {"base_gb": 1.5, "per_million_gb": 1.5},
-    "metaspades": {"base_gb": 2.0, "per_million_gb": 2.5},
+    "rnaspades": {"base_gb": 5.0, "per_million_gb": 3.0},
+    "metaspades": {"base_gb": 8.0, "per_million_gb": 5.0},
     "megahit": {"base_gb": 0.5, "per_million_gb": 0.5},
 }
 

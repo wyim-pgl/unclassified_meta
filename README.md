@@ -380,6 +380,12 @@ Result (`example_out/tables/read_category_by_sample.tsv`, % of unclassified read
 S3 has no classifier output, so its "bacterial" reads stay in the unclassified pool; with no bacterial
 reference given they end up as unclassified contigs or not assembled.
 
+**Real data.** On cactus (*O. cochenillifera*) RNA-seq reads that did not align to the genome (3 samples x
+200,000 pairs, no classifier output, host = the cactus genome, references from `download-refs`), the
+pipeline assigned 93.1-95.7 % of the reads to viruses: 88.1 % of all reads to contigs closest to a
+*Potexvirus* sp. genome (NC_040842.1, 80.7 % nucleotide identity, i.e. a related but different strain) and
+6.4 % to Cactus carlavirus 1 (89.1 % identity); 0.1-0.4 % were host and 4.0-5.2 % were not assembled.
+
 Open `example_out/report.html` in a browser. Virus A is found by BLASTN (its genome is in the reference);
 virus B has no similar genome in the reference, only a similar protein, and is found by DIAMOND blastx.
 
@@ -451,7 +457,37 @@ The assembler is the step that needs the most memory. Before assembling, the pip
 memory from the number of pooled reads and prints a **WARNING** when the estimate exceeds `--memory` or
 the free memory of the machine, with the subsample size that would fit.
 
-{{MEMORY_SECTION}}
+**Measured peak memory and time** (`/usr/bin/time -v`, 16 threads, Pronghorn cluster, 2026-11-17; input:
+cactus RNA-seq read pairs without a genome alignment, mostly plant viruses):
+
+| Pooled read pairs | rnaSPAdes memory | rnaSPAdes time | MEGAHIT memory | MEGAHIT time |
+|---|---|---|---|---|
+| 250,000 | 5.3 GB | 0:31 | 0.29 GB | 0:18 |
+| 500,000 | 5.6 GB | 0:48 | 0.32 GB | 0:33 |
+| 1,000,000 | 6.2 GB | 1:29 | 0.36 GB | 0:48 |
+| 2,000,000 | 10.8 GB | 2:52 | 0.48 GB | 1:25 |
+| 4,000,000 | 10.8 GB | 3:24 | 0.56 GB | 1:48 |
+
+The whole pipeline on 3 samples x 200,000 read pairs (600,000 pooled pairs, rnaSPAdes, the full RefSeq
+viral / Swiss-Prot references and a 1 Gb host genome) took **3 min** with a peak of **6.0 GB**.
+
+Assembler memory follows the number of *distinct* sequences (k-mers), not just the number of reads, so a
+diverse soil or gut metagenome needs more than these virus-dominated reads. The warning therefore uses a
+deliberately generous rule of thumb:
+
+| Assembler | Estimated peak memory |
+|---|---|
+| rnaSPAdes (`--mode rna`) | 5 GB + 3 GB per million pooled read pairs |
+| MEGAHIT (`--mode dna`) | 0.5 GB + 0.5 GB per million pooled read pairs |
+| metaSPAdes | 8 GB + 5 GB per million pooled read pairs (not measured) |
+
+Examples with the default 1,000,000 pairs per sample: 4 samples (4 M pairs) → rnaSPAdes about 17 GB,
+MEGAHIT about 2.5 GB; 20 samples (20 M pairs) → rnaSPAdes about 65 GB (the pipeline warns when this is
+more than `--memory`; lower `--subsample`, e.g. `--subsample 300000`, or use `--assembler megahit`).
+The real peak is recorded in `tables/resources.tsv` after every run, so you can calibrate for your data.
+
+Run time: BLASTN and DIAMOND against the references take minutes for a few thousand contigs; Bowtie 2
+read-back takes about a minute per million read pairs with 16 threads.
 
 Disk: the unclassified reads (about the size of the input FASTQ times the unclassified fraction), the
 references (section 3), and `work/` (roughly 2-3 times the pooled reads during assembly; the pooled reads
