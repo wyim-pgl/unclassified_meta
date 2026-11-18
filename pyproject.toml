@@ -20,4 +20,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["e2e: end-to-end test that runs the external tools (slow)"]
+markers = ["e2e: end-to-end test that runs the external tools (slow)", "network: needs internet (reference listing)"]

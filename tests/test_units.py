@@ -119,3 +119,16 @@ def test_missing_references_fail_early(tmp_path):
     cfg = config.load_config(None, {"references": {"refs_dir": str(tmp_path)}})
     with pytest.raises(ValueError, match="download-refs"):
         config.check_references(cfg)
+
+
+@pytest.mark.network
+def test_download_refs_dry_run_lists_all_sources(tmp_path):
+    from unclassified_meta import refs
+    try:
+        rows = refs.plan(tmp_path / "refs")
+    except OSError as e:
+        pytest.skip(f"no network: {e}")
+    names = {r[0] for r in rows}
+    assert {"refseq_viral_genomic", "refseq_viral_protein", "silva", "rfam_5.8S", "sprot_viridiplantae"} <= names
+    assert any(r[1].endswith(".1.genomic.fna.gz") for r in rows)
+    assert not (tmp_path / "refs" / "viral" / "refseq_viral.fna").exists()   # nothing downloaded

@@ -126,7 +126,7 @@ def plan(outdir: Path) -> list[tuple[str, str, str]]:
 
 # Prepared disk use (uncompressed FASTA + BLAST/DIAMOND index) relative to the compressed download,
 # measured on a full run (see README "References"); used only for the free-space check.
-PREPARED_PER_DOWNLOAD = 3.5
+PREPARED_PER_DOWNLOAD = 2.5   # 1.3 GB prepared / 0.53 GB downloaded, 2026-11-17
 
 
 def remote_size(url: str) -> int | None:

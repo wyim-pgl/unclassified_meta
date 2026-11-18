@@ -164,16 +164,16 @@ Plus your **host genome** (FASTA), also required: give it with `--host NAME=geno
 
 | Reference | URL | File(s) | Download (compressed) | On disk after preparation | Used by |
 |---|---|---|---|---|---|
-| RefSeq viral genomes | https://ftp.ncbi.nlm.nih.gov/refseq/release/viral/ | `viral.*.1.genomic.fna.gz` (currently `viral.1.1.genomic.fna.gz`) | 178 MB | {{SIZE_VIRAL_GENOMIC}} | virus layer, BLASTN |
-| RefSeq viral proteins | same folder | `viral.*.protein.faa.gz` (currently `viral.1.protein.faa.gz`) | 107 MB | {{SIZE_VIRAL_PROTEIN}} | virus layer, DIAMOND blastx |
-| SILVA 138.2 SSU | https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/ | `SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz` | 201 MB | rRNA total {{SIZE_RRNA}} | rRNA layer, BLASTN |
+| RefSeq viral genomes | https://ftp.ncbi.nlm.nih.gov/refseq/release/viral/ | `viral.*.1.genomic.fna.gz` (currently `viral.1.1.genomic.fna.gz`) | 178 MB | 709 MB (FASTA 593 MB, 19,641 genomes + BLAST index) | virus layer, BLASTN |
+| RefSeq viral proteins | same folder | `viral.*.protein.faa.gz` (currently `viral.1.protein.faa.gz`) | 107 MB | 447 MB (FASTA 229 MB, 722,823 proteins + DIAMOND db 239 MB) | virus layer, DIAMOND blastx |
+| SILVA 138.2 SSU | https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/ | `SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz` | 201 MB | rRNA total 71 MB (FASTA 53 MB, 37,663 sequences + BLAST index) | rRNA layer, BLASTN |
 | SILVA 138.2 LSU | same folder | `SILVA_138.2_LSURef_NR99_tax_silva.fasta.gz` | 71 MB | (in rRNA total) | rRNA layer, BLASTN |
 | Rfam 5.8S rRNA | https://ftp.ebi.ac.uk/pub/databases/Rfam/CURRENT/fasta_files/RF00002.fa.gz | `RF00002.fa.gz` | 0.8 MB | (in rRNA total) | rRNA layer, BLASTN |
-| Swiss-Prot Viridiplantae | https://rest.uniprot.org/uniprotkb/stream?format=fasta&compressed=true&query=%28reviewed%3Atrue%29%20AND%20%28taxonomy_id%3A33090%29 | streamed FASTA (42,110 proteins on 2026-11-17) | {{SIZE_SPROT_DL}} | {{SIZE_SPROT}} | protein layer, DIAMOND blastx |
+| Swiss-Prot Viridiplantae | https://rest.uniprot.org/uniprotkb/stream?format=fasta&compressed=true&query=%28reviewed%3Atrue%29%20AND%20%28taxonomy_id%3A33090%29 | streamed FASTA (42,110 proteins on 2026-11-17) | 10 MB | 41 MB (FASTA 21 MB + DIAMOND db 21 MB) | protein layer, DIAMOND blastx |
 | *optional* Kraken2 database | https://benlangmead.github.io/aws-indexes/k2 | e.g. Viral 0.5 GB archive / 0.6 GB index; Standard-8 5.5 / 7.5 GB; PlusPF 89.7 / 116.1 GB; Standard 84.6 / 109.4 GB (release 10/22/2026) | see left | see left | kraken2 layer |
 
-**Total disk for the required references: {{SIZE_TOTAL}}** (measured with `du -sh refs/` on
-{{SIZE_DATE}}, RefSeq release 238). RefSeq viral grows with every release, so expect these numbers to
+**Total disk for the required references: 1.3 GB after preparation; about 0.53 GB is downloaded, and about 1.8 GB is used at the peak while the downloaded `.gz` files still exist** (measured with `du -sh refs/` on
+2026-11-17 on the Pronghorn cluster (UNR); the full `download-refs` run took 2 min and 0.3 GB of memory there, RefSeq release 238). RefSeq viral grows with every release, so expect these numbers to
 increase slowly. Downloaded `.gz` files are deleted after preparation unless you add `--keep-sources`.
 `download-refs` prints the expected download and disk size first and warns when the folder does not have
 enough free space. Typical download time: 5-20 minutes, depending on the network.
@@ -371,7 +371,14 @@ unclassified-meta run --input-dir example/reads --refs example/refs --host testh
 
 Result (`example_out/tables/read_category_by_sample.tsv`, % of unclassified reads):
 
-{{EXAMPLE_TABLE}}
+| sample | host genome | virus | plant protein | rRNA | unclassified contig | not assembled |
+|---|---|---|---|---|---|---|
+| S1 (paired, Kraken2) | 16.6 | 74.6 | 5.0 | 3.3 | 0.5 | 0.0 |
+| S2 (paired, Centrifuge) | 11.4 | 82.1 | 3.4 | 2.6 | 0.5 | 0.0 |
+| S3 (single-end, no classifier) | 21.3 | 65.7 | 3.6 | 1.8 | 3.0 | 4.7 |
+
+S3 has no classifier output, so its "bacterial" reads stay in the unclassified pool; with no bacterial
+reference given they end up as unclassified contigs or not assembled.
 
 Open `example_out/report.html` in a browser. Virus A is found by BLASTN (its genome is in the reference);
 virus B has no similar genome in the reference, only a similar protein, and is found by DIAMOND blastx.
