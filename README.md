@@ -364,6 +364,27 @@ sample's unclassified reads in the bar chart panel B and the Sankey diagrams). U
 use every read, for example to recover rare organisms. The full set of unclassified reads is always saved
 in `unclassified_reads/`, whatever the subsample.
 
+**DNA: MEGAHIT or metaSPAdes?** DNA mode uses MEGAHIT by default; add `--assembler metaspades` to use
+metaSPAdes instead.
+
+| | MEGAHIT (default for `--mode dna`) | metaSPAdes (`--assembler metaspades`) |
+|---|---|---|
+| Contigs | somewhat shorter, more fragmented | usually longer and more contiguous; handles mixtures of related strains better |
+| Memory | very low (measured: 0.36 GB for 1 M read pairs) | high; not measured here, the warning assumes 8 GB + 5 GB per million read pairs |
+| Speed | fast | several times slower |
+| Input | paired-end, single-end, or both | one paired-end library only; with single-end reads in the pool the run stops and asks for MEGAHIT |
+
+Points to weigh for this pipeline:
+
+- Longer contigs are easier to identify with BLAST and DIAMOND, so metaSPAdes can reduce the
+  `unclassified` and `not assembled` shares. That is the reason to choose it.
+- The pipeline's goal is the share of reads in each class, not finished genomes. When contigs are at
+  least 300 bp and the reads align back well, MEGAHIT is usually enough: in the cactus RNA-seq test only
+  4-5 % of the unclassified reads were not assembled.
+- Unclassified reads from DNA metagenomes can be numerous, so memory is the main limit for metaSPAdes,
+  especially with `--subsample all`. Keep the default subsample (1 M read pairs per sample) or raise
+  `--memory` and watch the warning printed before assembly.
+
 ---
 
 ## 7. Worked example
