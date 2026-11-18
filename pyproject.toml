@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unclassified-meta"
+version = "0.1.0"
+description = "Explain reads left unclassified by Kraken2 or Centrifuge(r): pool, assemble, classify contigs by priority, and count reads back per sample."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Won Yim", email = "wyim@unr.edu" }]
+dependencies = ["pandas>=1.5", "matplotlib>=3.6", "plotly>=5", "pyyaml>=6"]
+
+[project.scripts]
+unclassified-meta = "unclassified_meta.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: end-to-end test that runs the external tools (slow)"]

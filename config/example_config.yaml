@@ -1,0 +1,25 @@
+# unclassified-meta configuration (all keys optional; command-line options override them)
+mode: rna                 # rna (rnaSPAdes) | dna (MEGAHIT)
+outdir: results
+threads: 16
+memory_gb: 64             # memory for the assembler; also used for the memory warning
+subsample: 1000000        # read pairs per sample, or "all"
+seed: 11
+min_contig_len: 300
+assembler: auto           # auto | rnaspades | megahit | metaspades
+references:
+  refs_dir: refs          # made by `unclassified-meta download-refs --outdir refs`
+  host:                   # required; checked in this order
+    - name: cactus
+      fasta: /path/to/host_genome.fa
+  organelle: null         # optional plastid/mitochondrial genomes
+  extra_virus_fasta: null # optional small custom virus FASTA
+  host_proteome: null     # optional host proteins for the protein check
+  kraken2_db: null        # optional Kraken2 database directory
+priority: [rrna, organelle, host, virus, kraken2, protein]
+thresholds:
+  rrna: {min_identity: 85.0, min_cover: 0.5, evalue: 1.0e-20}
+  organelle: {min_identity: 85.0, min_cover: 0.5, evalue: 1.0e-10}
+  host: {min_cover: 0.5, preset: asm20}
+  virus: {blastn_min_len: 100, evalue: 1.0e-10, tblastx_extra: false}
+  protein: {evalue: 1.0e-10}

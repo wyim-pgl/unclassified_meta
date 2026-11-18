@@ -1,0 +1,3 @@
+sample	r1	r2	classifier_output	classifier
+leaf1	reads/leaf1_R1.fastq.gz	reads/leaf1_R2.fastq.gz	reads/leaf1.kraken2	kraken2
+root1	reads/root1.fastq.gz	.	reads/root1.cfr	centrifuger
