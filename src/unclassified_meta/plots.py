@@ -85,7 +85,7 @@ def stacked_bars(table: pd.DataFrame, inputs: pd.DataFrame, out_prefix: Path) ->
 
 
 def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_html: Path,
-           sample: str | None = None, top_refs: int = 8) -> Path:
+           sample: str | None = None, top_refs: int = 8, min_ref_share: float = 0.01) -> Path:
     """Total reads -> classified / unclassified -> categories -> (virus) top reference genomes."""
     import plotly.graph_objects as go
 
@@ -132,6 +132,7 @@ def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_ht
             share_total = vr["w"].sum()
             if share_total > 0:
                 shown = 0
+                vr = vr[vr["w"] >= min_ref_share * share_total]  # tiny hits go to "other viruses"
                 for _, r in vr.head(top_refs).iterrows():
                     part = int(round(v * r["w"] / share_total))
                     name = (r["best_hit_title"] or r["best_hit"])[:60]
@@ -146,7 +147,19 @@ def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_ht
                             "(counts after subsampling are scaled to all unclassified reads)",
                       font_size=11, height=650)
     fig.write_html(out_html, include_plotlyjs="cdn")
+    _static_png(fig, out_html.with_suffix(".png"))
     return out_html
+
+
+def _static_png(fig, out_png: Path) -> None:
+    """Also save a PNG of a plotly figure when the optional `kaleido` package is installed."""
+    try:
+        import kaleido  # noqa: F401
+    except ImportError:
+        print(f"[unclassified-meta] note: kaleido not installed, {out_png.name} not written "
+              "(pip install kaleido==0.2.1 to get static Sankey PNGs)")
+        return
+    fig.write_image(out_png, width=1100, height=650, scale=2)
 
 
 def _rgba(hexcol: str, alpha: float) -> str:

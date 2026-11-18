@@ -21,6 +21,15 @@ assembler MEGAHIT), paired-end or single-end.
 The method was first used on cactus (*Opuntia cochenillifera*) diel RNA-seq data, where 88-95 % of the
 reads without a genome alignment turned out to be plant viruses (potexviruses and Cactus carlavirus 1).
 
+**Example result** (cactus RNA-seq, 3 samples x 200,000 read pairs that did not align to the cactus genome;
+Kraken2 Standard-8 classified only 0.5-1.3 % of them):
+
+![Read fate of cactus RNA-seq reads, Sankey diagram](docs/img/cactus_rnaseq_sankey.png)
+
+*Sankey diagram: all reads -> classified by Kraken2 or not -> what the pipeline found in the unclassified
+reads -> which virus genome each viral contig is closest to. The width of each band is the number of reads.
+The interactive version (`figures/sankey_all_samples.html`) shows the exact numbers when you hover over a band.*
+
 ---
 
 ## Contents
@@ -389,6 +398,22 @@ unclassified pairs to viruses: 88.9 % of all pairs to one contig closest to a *P
 carlavirus 1 (89.0 % identity). Host 0.1-0.4 %, plant protein 0.2-0.9 %, not assembled 3.9-4.8 %. The
 whole run took 2 min 53 s with a peak of 6.0 GB.
 
+The figures this run writes (`example_out/figures/`):
+
+| Bar chart (`read_categories.png`) | Sankey diagram (`sankey_all_samples.png`) |
+|---|---|
+| ![bar chart, synthetic example](docs/img/example_read_categories.png) | ![Sankey, synthetic example](docs/img/example_sankey.png) |
+
+*Bar chart, panel A: each bar is one sample; colours show what its unclassified reads are, in % of the
+unclassified reads. Panel B: the same, in % of all reads, with the reads the classifier already assigned
+in dark grey. S3 has no classifier output, so panel B shows no dark grey for it.*
+
+The same figures for the real cactus data:
+
+| Bar chart | Sankey diagram |
+|---|---|
+| ![bar chart, cactus RNA-seq](docs/img/cactus_rnaseq_read_categories.png) | ![Sankey, cactus RNA-seq](docs/img/cactus_rnaseq_sankey.png) |
+
 Open `example_out/report.html` in a browser. Virus A is found by BLASTN (its genome is in the reference);
 virus B has no similar genome in the reference, only a similar protein, and is found by DIAMOND blastx.
 
@@ -412,8 +437,8 @@ results/
      resources.tsv
   figures/
      read_categories.png / .pdf
-     sankey_all_samples.html
-     sankey/<sample>.html
+     sankey_all_samples.html (+ .png if kaleido is installed)
+     sankey/<sample>.html (+ .png)
   contigs/contigs.fa                  the assembled contigs >= min length (names contig_000001 ...)
   logs/pipeline.log                   every command that was run, with times
   work/                               intermediate files (BLAST/DIAMOND results, read-back counts, assembly)
@@ -450,7 +475,7 @@ had assigned.
 
 **`figures/sankey_all_samples.html`, `figures/sankey/<sample>.html`** — interactive flow diagrams
 (open in a browser; needs internet to load the plotting library): all reads → classified / unclassified
-→ categories → the most common virus references.
+→ categories → the most common virus references. A static PNG next to each HTML is written when the optional package `kaleido` is installed (`pip install kaleido==0.2.1`); without it the run prints a note and keeps only the HTML.
 
 ---
 
