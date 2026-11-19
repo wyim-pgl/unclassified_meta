@@ -1,11 +1,12 @@
-"""Align each sample's unclassified reads back to the contigs and count reads per contig."""
+"""Align each sample's unclassified reads back to the contigs and count fragments per contig."""
 from __future__ import annotations
 
 import shlex
 from collections import Counter
 from pathlib import Path
 
-from .runner import require, sh
+from .fragments import count_primary, run_bowtie2
+from .runner import StepError, require, sh
 
 
 def build_index(contigs: Path, prefix: Path, threads: int) -> None:
@@ -16,14 +17,17 @@ def build_index(contigs: Path, prefix: Path, threads: int) -> None:
 
 
 def count_sample(prefix: Path, r1: Path, r2: Path | None, out_counts: Path, threads: int,
-                 preset: str = "--very-fast") -> None:
-    """Write 'count<TAB>contig' lines: primary alignments of the first mate (paired) or of each read (single)."""
-    require("bowtie2", "samtools")
-    q = lambda x: shlex.quote(str(x))
-    reads = f"-1 {q(r1)} -2 {q(r2)}" if r2 else f"-U {q(r1)}"
-    flt = "-F 2308 -f 64" if r2 else "-F 2308"   # 2308 = unmapped + secondary + supplementary
-    sh(f"bowtie2 -p {threads} {preset} --no-unal -x {q(prefix)} {reads} 2> {q(str(out_counts) + '.bowtie2.log')} "
-       f"| samtools view {flt} - | cut -f3 | sort | uniq -c | awk '{{print $1\"\\t\"$2}}' > {q(out_counts)}")
+                 preset: str = "--very-fast") -> dict:
+    """Write 'count<TAB>contig' lines, one fragment (pair or single read) counted once: the contig of mate 1's
+    primary alignment, or of mate 2's when mate 1 did not align (see fragments.py, 'primary' policy)."""
+    res = run_bowtie2(prefix, r1, r2, Path(str(out_counts) + ".bowtie2.log"), threads, preset, count_primary)
+    counts, seen = res["result"]
+    if res["input_reads"] is not None and res["input_reads"] != seen:
+        raise StepError(f"{out_counts.name}: {seen} fragments in the SAM stream but Bowtie 2 read {res['input_reads']}")
+    with open(out_counts, "w") as fo:
+        for contig, n in sorted(counts.items()):
+            fo.write(f"{n}\t{contig}\n")
+    return res
 
 
 def read_counts(path: Path) -> Counter:

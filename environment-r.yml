@@ -1,0 +1,12 @@
+# R environment for `unclassified-meta da` (ANCOM-BC2). Kept apart from environment.yml because R and
+# Bioconductor pull a large, separate dependency tree.
+#   micromamba create -y -f environment-r.yml
+#   unclassified-meta da ... --rscript "$(micromamba run -n unclassified_meta_r which Rscript)"
+name: unclassified_meta_r
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base=4.5
+  - bioconductor-ancombc=2.14.0
+  - r-ggplot2=4.0

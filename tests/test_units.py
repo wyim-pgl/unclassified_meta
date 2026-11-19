@@ -18,7 +18,7 @@ def test_normalise_read_id_strips_mate_suffix_and_comment():
 def test_kraken2_parser_counts_classified_and_unclassified(tmp_path):
     f = tmp_path / "k.out"
     f.write_text("C\tr1\t2\t100\t2:66\nU\tr2\t0\t100\t0:66\nU\tr3/1\t0\t100\t0:66\n")
-    ids, total, classified = extract.parse_kraken2(f)
+    ids, total, classified, low, _ = extract.parse_kraken2(f)
     assert ids == {"r2", "r3"} and total == 3 and classified == 1
 
 
@@ -36,7 +36,7 @@ def test_centrifuge_parser_read_with_any_hit_is_classified(tmp_path):
                  "b\tNC_1\t562\t900\n"
                  "c\tunclassified\t0\t0\n"
                  "c\tNC_2\t10239\t500\n")
-    ids, total, classified = extract.parse_centrifuge(f)
+    ids, total, classified, low, _ = extract.parse_centrifuge(f)
     assert ids == {"a"} and total == 3 and classified == 2
 
 

@@ -12,12 +12,16 @@ Contigs left after all layers are 'unclassified'.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
-from .io_utils import read_fasta, write_fasta
-from .runner import require, sh
+from .io_utils import make_staging_dir, read_fasta, remove_staging_dir, write_fasta
+from .runner import StepError, require, sh
 
 log = logging.getLogger("unclassified_meta")
 
@@ -112,16 +116,91 @@ def kraken_category(taxid: str, parent: dict) -> str:
     return "other"
 
 
+_DIGESTS: dict[tuple, str] = {}
+
+
+def source_digest(path: str | Path) -> str:
+    """sha256 of a whole reference file (cached per path, size and modification time within one process)."""
+    p = Path(path).resolve()
+    st = p.stat()
+    key = (str(p), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)   # ctime changes on any rewrite
+    if key not in _DIGESTS:
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 22), b""):
+                h.update(chunk)
+        _DIGESTS[key] = h.hexdigest()
+    return _DIGESTS[key]
+
+
+def _sources_record(sources) -> list[dict]:
+    return [{"path": str(Path(s).resolve()), "bytes": Path(s).stat().st_size, "sha256": source_digest(s)}
+            for s in sources]
+
+
+def sidecar_matches(db_file: str | Path, sources) -> bool:
+    """True when `<db>.source.json` records exactly these source files with their current content."""
+    side = Path(str(db_file) + ".source.json")
+    if not side.exists():
+        return False
+    try:
+        rec = json.loads(side.read_text())
+    except ValueError:
+        return False
+    if not isinstance(rec, dict):
+        return False
+    want = _sources_record(sources)
+    got = rec["sources"] if "sources" in rec else [rec]                 # several sources, or one
+    return [(g.get("bytes"), g.get("sha256")) for g in got] == [(w["bytes"], w["sha256"]) for w in want]
+
+
+def write_sidecar(db_file: str | Path, sources) -> None:
+    """Bind a database to the content of its source(s); written last, after the database is complete."""
+    rec = _sources_record(sources)
+    body = rec[0] if len(rec) == 1 else {"sources": rec}
+    side = Path(str(db_file) + ".source.json")
+    tmp = side.with_name("." + side.name + ".part")
+    tmp.write_text(json.dumps(body, indent=1))
+    os.replace(tmp, side)
+
+
+def blast_db_complete(prefix: str | Path) -> bool:
+    """The files of a nucleotide BLAST database: an alias (.nal) or the header, index and sequence files."""
+    prefix = str(prefix)
+    return Path(prefix + ".nal").exists() or all(Path(prefix + e).exists() for e in (".nhr", ".nin", ".nsq"))
+
+
+def build_blast_db(fasta: str | Path, prefix: str | Path) -> Path:
+    """makeblastdb into a temporary folder, move the files to `prefix`.*, then write the sidecar. An interrupted
+    build leaves no sidecar, so its files are never used."""
+    fasta, prefix = Path(fasta), Path(prefix)
+    Path(str(prefix) + ".source.json").unlink(missing_ok=True)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    tmpdir = make_staging_dir(prefix.parent, "makeblastdb")
+    sh(["makeblastdb", "-in", str(fasta), "-dbtype", "nucl", "-out", str(tmpdir / prefix.name)])
+    if not blast_db_complete(tmpdir / prefix.name):
+        raise StepError(f"makeblastdb wrote an incomplete database for {fasta}")
+    for old in prefix.parent.glob(prefix.name + ".n*"):
+        old.unlink()
+    for f in tmpdir.iterdir():
+        if f.name != ".owned_by_unclassified_meta":
+            os.replace(f, prefix.parent / f.name)
+    remove_staging_dir(tmpdir)
+    write_sidecar(prefix, [fasta])
+    return prefix
+
+
 def blast_db(fasta: str | Path, fallback: Path) -> Path:
-    """Use a BLAST database built next to the FASTA (download-refs does this); otherwise build one in the workdir."""
+    """A BLAST database built from exactly this FASTA content: the one next to the FASTA (download-refs) when its
+    sidecar matches, else one in the workdir (reused only while its sidecar matches the FASTA)."""
     fasta = Path(fasta)
-    for ext in (".nal", ".nsq", ".00.nsq", ".ndb"):
-        if Path(str(fasta) + ext).exists():
-            return fasta
-    if not Path(str(fallback) + ".ndone").exists():
-        sh(["makeblastdb", "-in", str(fasta), "-dbtype", "nucl", "-out", str(fallback)])
-        Path(str(fallback) + ".ndone").touch()
-    return fallback
+    if blast_db_complete(fasta) and sidecar_matches(fasta, [fasta]):
+        return fasta
+    fallback = Path(fallback)
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    if blast_db_complete(fallback) and sidecar_matches(fallback, [fasta]):
+        return fallback
+    return build_blast_db(fasta, fallback)
 
 
 def assign_by_priority(contigs: list[str], layer_hits: list[tuple[str, dict[str, dict]]]) -> dict[str, dict]:
@@ -164,8 +243,11 @@ class Classifier:
         if len(dbs) == 1 and str(dbs[0]).endswith(".dmnd"):
             dmnd = Path(dbs[0])
         else:
+            # bound to its sources by a sidecar written after the database is complete; a database without a
+            # matching sidecar (other sources, or an interrupted build) is rebuilt
             dmnd = self.work / f"{tag}.dmnd"
-            if not dmnd.exists():
+            if not (dmnd.exists() and sidecar_matches(dmnd, dbs)):
+                Path(str(dmnd) + ".source.json").unlink(missing_ok=True)
                 fasta = self.work / f"{tag}.faa"
                 with open(fasta, "w") as fo:
                     for d in dbs:
@@ -174,7 +256,11 @@ class Classifier:
                             fo.write((self.work / "_getseq.faa").read_text())
                         else:
                             fo.writelines(open(d))
-                sh(["diamond", "makedb", "--in", str(fasta), "-d", str(dmnd.with_suffix("")), "-p", str(self.threads)])
+                tdir = make_staging_dir(self.work, "diamond makedb")
+                sh(["diamond", "makedb", "--in", str(fasta), "-d", str(tdir / tag), "-p", str(self.threads)])
+                os.replace(tdir / f"{tag}.dmnd", dmnd)
+                remove_staging_dir(tdir)
+                write_sidecar(dmnd, dbs)
         out = self.work / f"{tag}.diamond.tsv"
         sh(["diamond", "blastx", "-q", str(query), "-d", str(dmnd), "-p", str(self.threads),
             "-e", str(evalue), "-k", "1", "--sensitive", "--quiet",

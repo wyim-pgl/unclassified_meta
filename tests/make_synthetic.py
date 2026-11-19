@@ -90,6 +90,15 @@ def wfa(path, recs):
                 fo.write(s[i:i + 70] + "\n")
 
 
+def seal_refs(out: Path) -> None:
+    """Seal each reference folder like download-refs does (MANIFEST.json written after the files)."""
+    from unclassified_meta import manifest
+    for sub in ("rrna", "viral", "protein"):
+        d = out / "refs" / sub
+        manifest.seal(d, sorted(f.name for f in d.iterdir() if f.is_file() and f.name != manifest.NAME),
+                      {"step": "test fixture"})
+
+
 def main(outdir: str, seed: int = 7) -> None:
     rng = random.Random(seed)
     out = Path(outdir)
@@ -116,6 +125,7 @@ def main(outdir: str, seed: int = 7) -> None:
     wfa(out / "refs/protein/sprot_viridiplantae.faa",
         [("sp|P99999|TEST_PLANT Test plant protein OS=Testplant OX=33090", translate(plant_gene).rstrip("*")),
          ("sp|P99998|OTHER_PLANT Other protein OS=Testplant OX=33090", "".join(rng.choices(AA, k=250)))])
+    seal_refs(out)
 
     # sample composition: (source, genome, pairs)
     designs = {
@@ -156,7 +166,9 @@ def main(outdir: str, seed: int = 7) -> None:
                 fo.write("readID\tseqID\ttaxID\tscore\t2ndBestScore\thitLength\tqueryLength\tnumMatches\n")
                 for rid, a, b, src in reads:
                     if classified(rid, src):
-                        fo.write(f"{rid}\tNZ_CP000001.1\t562\t900\t0\t80\t200\t1\n")
+                        # bacterial reads: strong hits; the "host" reads the classifier assigned: weak, short hits
+                        sc, hl = (900, 80) if src == "bact" else (49, 22)
+                        fo.write(f"{rid}\tNZ_CP000001.1\t562\t{sc}\t0\t{hl}\t200\t1\n")
                     else:
                         fo.write(f"{rid}\tunclassified\t0\t0\t0\t0\t200\t1\n")
 

@@ -6,6 +6,8 @@ memory_gb: 64             # memory for the assembler; also used for the memory w
 subsample: 1000000        # read pairs per sample, or "all"
 seed: 11
 min_contig_len: 300
+min_score: 0              # Centrifuge(r) only: assignments with a lower score count as unclassified
+min_hitlen: 0             # Centrifuge(r) only: assignments with a shorter hit count as unclassified
 assembler: auto           # auto | rnaspades | megahit | metaspades
 references:
   refs_dir: refs          # made by `unclassified-meta download-refs --outdir refs`

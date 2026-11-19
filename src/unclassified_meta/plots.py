@@ -84,6 +84,22 @@ def stacked_bars(table: pd.DataFrame, inputs: pd.DataFrame, out_prefix: Path) ->
     return paths
 
 
+def allocate(total: int, weights) -> list[int]:
+    """Split an integer total in proportion to weights with the largest-remainder method: every part is an
+    integer and the parts sum exactly to the total (independent rounding can over- or under-shoot it)."""
+    import math
+    w = [max(float(x), 0.0) for x in weights]
+    s = sum(w)
+    if total <= 0 or s <= 0:
+        return [0] * len(w)
+    exact = [total * x / s for x in w]
+    parts = [math.floor(e) for e in exact]
+    rest = total - sum(parts)
+    for i in sorted(range(len(w)), key=lambda k: (-(exact[k] - parts[k]), k))[:rest]:
+        parts[i] += 1
+    return parts
+
+
 def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_html: Path,
            sample: str | None = None, top_refs: int = 8, min_ref_share: float = 0.01) -> Path:
     """Total reads -> classified / unclassified -> categories -> (virus) top reference genomes."""
@@ -124,22 +140,17 @@ def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_ht
         link(unc, n, v, _rgba(col, 0.45))
         if c == "virus" and refs is not None and not refs.empty:
             vr = refs[refs["category"] == "virus"].copy()
-            if sample is not None:
-                vr["w"] = vr.get(f"pct_{sample}", 0)
-            else:
-                vr["w"] = vr["reads_pooled"]
+            vr["w"] = reference_weights(vr, inputs, sample).to_numpy()
             vr = vr.sort_values("w", ascending=False)
             share_total = vr["w"].sum()
             if share_total > 0:
-                shown = 0
-                vr = vr[vr["w"] >= min_ref_share * share_total]  # tiny hits go to "other viruses"
-                for _, r in vr.head(top_refs).iterrows():
-                    part = int(round(v * r["w"] / share_total))
+                top = vr[vr["w"] >= min_ref_share * share_total].head(top_refs)  # tiny hits go to "other viruses"
+                weights = top["w"].tolist() + [max(share_total - top["w"].sum(), 0.0)]
+                parts = allocate(v, weights)                   # integer flows that sum exactly to v
+                for (_, r), part in zip(top.iterrows(), parts):
                     name = (r["best_hit_title"] or r["best_hit"])[:60]
                     link(n, node(name, col), part, _rgba(col, 0.3))
-                    shown += part
-                if v - shown > 0:
-                    link(n, node("other viruses", col), v - shown, _rgba(col, 0.3))
+                link(n, node("other viruses", col), parts[-1], _rgba(col, 0.3))
     fig = go.Figure(go.Sankey(arrangement="snap",
                               node=dict(label=nodes, color=colors, pad=14, thickness=16),
                               link=dict(source=src, target=dst, value=val, color=lcol)))
@@ -149,6 +160,20 @@ def sankey(inputs: pd.DataFrame, table: pd.DataFrame, refs: pd.DataFrame, out_ht
     fig.write_html(out_html, include_plotlyjs="cdn")
     _static_png(fig, out_html.with_suffix(".png"))
     return out_html
+
+
+def reference_weights(refs: pd.DataFrame, inputs: pd.DataFrame, sample: str | None = None) -> pd.Series:
+    """Estimated unclassified reads per reference row: each sample's share (pct_<sample>, of the reads it used)
+    times the sample's unclassified reads, summed over the samples (or for one sample). Pooling the subsampled
+    read counts instead would weight every sample by its subsample, not by its reads."""
+    unc = dict(zip(inputs["sample"].astype(str), inputs["unclassified_reads"]))
+    names = [sample] if sample is not None else list(unc)
+    w = pd.Series(0.0, index=refs.index)
+    for s in names:
+        col = f"pct_{s}"
+        if col in refs.columns:
+            w = w + refs[col].fillna(0).astype(float) / 100.0 * float(unc.get(str(s), 0))
+    return w
 
 
 def _static_png(fig, out_png: Path) -> None:

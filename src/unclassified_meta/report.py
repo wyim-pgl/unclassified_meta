@@ -45,7 +45,7 @@ layer order {', '.join(cfg['priority'])}. unclassified-meta {__version__}.</p>
 <p>Sankey diagrams (interactive):</p><ul>{links}</ul>
 <h2>3. Read categories per sample (% of reads used)</h2>{_table(frac)}
 <h2>4. Top reference hits (pooled)</h2>
-{_table(refs.sort_values('reads_pooled', ascending=False)[['category', 'best_hit_title', 'n_contigs', 'pct_of_reads_used_pooled', 'read_weighted_identity']] if not refs.empty else refs)}
+{_table(refs.sort_values('reads_pooled', ascending=False)[['category', 'best_hit_title', 'n_contigs', 'pct_of_reads_used_pooled', 'blastn_identity', 'tblastx_identity', 'diamond_identity']] if not refs.empty else refs)}
 <h2>5. Contigs per category</h2>{_table(cat_counts)}
 <h2>6. Resources of the heavy steps</h2>{_table(resources)}
 <p>Full tables are in <code>tables/</code>; figures in <code>figures/</code>; the log is <code>logs/pipeline.log</code>.</p>
