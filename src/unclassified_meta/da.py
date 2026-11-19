@@ -103,7 +103,8 @@ def run_ancombc2(args, inputs=()) -> Path:
             cmd += ["--lme-relax-checks"]
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.stderr.strip():
-            print(p.stderr.strip())
+            # R writes into the staging folder, which is removed below; name the published files instead
+            print(p.stderr.strip().replace(str(stage), str(outdir)))
         if p.returncode != 0:
             raise StepError(f"ANCOM-BC2 failed (exit {p.returncode}); see the messages above")
         made = sorted(f.name for f in stage.iterdir() if f.is_file() and f.name != ".owned_by_unclassified_meta")
