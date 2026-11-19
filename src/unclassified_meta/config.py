@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from .io_utils import open_text
+
 CLASSIFIERS = ("kraken2", "centrifuge", "centrifuger", "none")
 LAYERS = ("rrna", "organelle", "host", "virus", "kraken2", "protein")
 
@@ -19,6 +21,8 @@ DEFAULTS: dict = {
     "subsample": 1_000_000,        # read pairs (or single reads) per sample; "all" keeps every read
     "seed": 11,
     "min_contig_len": 300,
+    "min_score": 0,                # Centrifuge(r) only: assignments with a lower score count as unclassified
+    "min_hitlen": 0,               # Centrifuge(r) only: assignments with a shorter hit count as unclassified
     "assembler": "auto",           # auto (rna: rnaspades, dna: megahit) | rnaspades | megahit | metaspades
     "references": {
         # REQUIRED (made by `unclassified-meta download-refs --outdir refs`; point refs_dir at that folder)
@@ -181,6 +185,52 @@ def read_samplesheet(path: str | Path) -> list[Sample]:
     return samples
 
 
+# column names of the output tables; a sample with one of these names would overwrite a column
+RESERVED_SAMPLE_NAMES = frozenset({
+    "feature_id", "label", "namespace", "accession", "identity_class", "n_sequences", "total_length", "evidence",
+    "n_contigs", "weighted_identity", "identity_min", "identity_max", "mixed_identity", "reference_included",
+    "best_hit_title", "rank", "lineage", "source", "contig", "sample", "category"})
+
+
+def check_sample_names(names, where: str = "samples") -> None:
+    """Refuse duplicate sample names and names that are column names of the output tables."""
+    names = [str(n) for n in names]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        raise ValueError(f"{where}: duplicate sample name(s): {', '.join(dup)}")
+    bad = sorted(n for n in names if n.lower() in RESERVED_SAMPLE_NAMES)
+    if bad:
+        raise ValueError(f"{where}: sample name(s) {', '.join(bad)} are reserved (column names of the output "
+                         "tables); rename the sample(s)")
+
+
+# fixed columns of tables/reference_by_sample.tsv; a sample adds the column pct_<sample>
+REFERENCE_TABLE_COLUMNS = frozenset({
+    "category", "best_hit", "best_hit_title", "n_contigs", "reads_pooled", "pct_of_reads_used_pooled",
+    "blastn_identity", "tblastx_identity", "diamond_identity", "minimap2_identity"})
+
+
+def output_read_names(s: "Sample") -> list[str]:
+    """File names `extract` writes for a sample under unclassified_reads/."""
+    return [f"{s.name}_R1.fastq.gz", f"{s.name}_R2.fastq.gz"] if s.paired else [f"{s.name}.fastq.gz"]
+
+
+def check_generated_names(samples: list["Sample"]) -> None:
+    """Names made from sample names must not collide: output read files (paired A -> A_R1.fastq.gz, single
+    A_R1 -> A_R1.fastq.gz) and the per-sample columns of the reference table (pct_<sample>)."""
+    owner: dict[str, str] = {}
+    for s in samples:
+        for f in output_read_names(s):
+            if f.lower() in owner:
+                raise ValueError(f"samples {owner[f.lower()]} and {s.name} would write the same output file "
+                                 f"unclassified_reads/{f}; rename one of them")
+            owner[f.lower()] = s.name
+        col = f"pct_{s.name}"
+        if col in REFERENCE_TABLE_COLUMNS:
+            raise ValueError(f"sample {s.name}: its column {col} would overwrite a column of the reference table; "
+                             "rename the sample")
+
+
 def validate_samples(samples: list[Sample]) -> None:
     if not samples:
         raise ValueError("no samples given")
@@ -190,69 +240,165 @@ def validate_samples(samples: list[Sample]) -> None:
                 raise FileNotFoundError(f"sample {s.name}: file not found: {f}")
         if not re.fullmatch(r"[A-Za-z0-9._-]+", s.name):
             raise ValueError(f"sample name {s.name!r}: use letters, digits, '.', '_' or '-' only")
+    check_sample_names([s.name for s in samples])
+    check_generated_names(samples)
 
 
-FASTQ_RE = re.compile(r"^(?P<sample>.+?)(?P<sep>[._-])(?:R)?(?P<mate>[12])(?:_001)?\.(?:fastq|fq)(?:\.gz)?$")
+# paired read files; the sample is the part before the mate token. Tried in this order:
+PAIRED_RES = (
+    # STAR --outReadsUnmapped Fastx: <sample>.Unmapped.out.mate1 / .mate2 (optionally gzipped)
+    re.compile(r"^(?P<sample>.+)\.Unmapped\.out\.mate(?P<mate>[12])(?:\.gz)?$"),
+    # <sample>[_clean]_R1.fastq.gz, <sample>_1.fq.gz, <sample>.R2.fastq, <sample>_R1_001.fastq.gz ...
+    re.compile(r"^(?P<sample>.+?)(?:[._-]clean)?[._-]R?(?P<mate>[12])(?:_001)?\.(?:fastq|fq)(?:\.gz)?$"),
+)
 SINGLE_RE = re.compile(r"^(?P<sample>.+?)\.(?:fastq|fq)(?:\.gz)?$")
 CLASSIFIER_EXT = {
     ".kraken": "kraken2", ".kraken2": "kraken2", ".kraken.out": "kraken2", ".kraken2.out": "kraken2",
-    ".k2": "kraken2", ".centrifuge": "centrifuge", ".centrifuge.out": "centrifuge",
-    ".cfr": "centrifuger", ".centrifuger": "centrifuger", ".centrifuger.out": "centrifuger",
+    ".k2": "kraken2", ".centrifuge": "centrifuge", ".centrifuge.out": "centrifuge", ".centrifuge.tsv": "centrifuge",
+    ".cfr": "centrifuger", ".cfr.tsv": "centrifuger", ".centrifuger": "centrifuger", ".centrifuger.out": "centrifuger",
+    ".centrifuger.tsv": "centrifuger",
 }
 
 
-def _looks_like_report(path: Path) -> bool:
-    """Kraken/centrifuge *reports* (percent-first summaries) are not per-read outputs."""
-    name = path.name.lower()
-    if "report" in name or name.endswith((".kreport", ".kreport2")):
-        return True
-    with open(path) as fh:
-        first = fh.readline().split("\t")
+def _is_int(x: str) -> bool:
+    return re.fullmatch(r"-?\d+", x.strip()) is not None
+
+
+def _is_num(x: str) -> bool:
     try:
-        float(first[0])
-        return True          # report lines start with a percentage
-    except (ValueError, IndexError):
+        float(x)
+        return True
+    except ValueError:
         return False
 
 
+def _line_kind(f: list[str]) -> str | None:
+    """What one tab-separated line looks like: a Kraken2 per-read line, a Centrifuge(r) per-read line, or a
+    Kraken-style report row."""
+    if len(f) >= 5 and f[0] in ("C", "U") and (_is_int(f[2]) or "(taxid" in f[2]):
+        return "kraken2"
+    if len(f) >= 8 and _is_int(f[2]) and all(_is_num(x) for x in f[3:8]):
+        return "centrifuge"
+    if len(f) in (6, 8) and _is_num(f[0]) and _is_int(f[1]) and _is_int(f[2]) \
+            and re.fullmatch(r"[A-Z]\d*|-", f[-3].strip()):
+        return "report"
+    return None
+
+
+def sniff_classifier(path: str | Path, n_lines: int = 20) -> str | None:
+    """Kind of a classifier file from its content (gzip or plain), never from its name: 'kraken2', 'centrifuge'
+    (also Centrifuger), 'report', or None when the first lines do not all agree on one kind."""
+    kinds, n = set(), 0
+    with open_text(path) as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            f = line.rstrip("\n").split("\t")
+            if n == 0 and f[0] == "readID":
+                continue                              # Centrifuge(r) header
+            kinds.add(_line_kind(f))
+            n += 1
+            if n >= n_lines:
+                break
+    if n == 0:
+        return "empty"                                # no records (a header at most): valid output of no reads
+    return kinds.pop() if len(kinds) == 1 and None not in kinds else None
+
+
+def _classifier_ext(name: str) -> tuple[str, str] | None:
+    """(extension incl. a trailing .gz, classifier) of a classifier file name, longest extension first."""
+    gz = name.endswith(".gz")
+    base = name[:-3] if gz else name
+    for ext in sorted(CLASSIFIER_EXT, key=len, reverse=True):
+        if base.endswith(ext) and len(base) > len(ext):
+            return ext + (".gz" if gz else ""), CLASSIFIER_EXT[ext]
+    return None
+
+
 def detect_samples(folder: str | Path) -> list[Sample]:
-    """Find FASTQ files (paired *_R1/_R2, *_1/_2, or single) and matching per-read classifier outputs."""
+    """Find read files and their per-read classifier outputs in one folder.
+
+    Reads: paired files (`<s>_R1/_R2`, `<s>_1/_2`, `<s>_clean_R1/_R2`, STAR `<s>.Unmapped.out.mate1/2`) or single
+    files (`<s>.fastq.gz`). Classifier outputs (`<s>.kraken2`, `<s>.cfr`, `<s>.cfr.tsv`, ... see CLASSIFIER_EXT) are
+    matched to a sample by the exact sample name. A sample with two candidate outputs, or an output whose name
+    matches no sample, is an error rather than a silent choice. Kraken-style reports are ignored.
+    """
     folder = Path(folder)
     files = sorted(p for p in folder.iterdir() if p.is_file())
     pairs: dict[str, dict] = {}
     singles: dict[str, Path] = {}
+    outputs: list[tuple[str, Path, str]] = []
     for p in files:
-        m = FASTQ_RE.match(p.name)
-        if m:
-            pairs.setdefault(m["sample"], {})[m["mate"]] = p
+        hit = _classifier_ext(p.name)
+        if hit:
+            kind = sniff_classifier(p)
+            if kind == "report":
+                continue                              # a Kraken-style report, not per-read output: not used here
+            fam = "kraken2" if hit[1] == "kraken2" else "centrifuge"
+            if kind is None:
+                raise ValueError(f"{folder}: {p.name} is named like {hit[1]} output, but its lines are not per-read "
+                                 "classifier output (Kraken2: C/U, read ID, taxID ...; Centrifuge(r): read ID, seq ID, "
+                                 "taxID, score, 2nd score, hit length, query length, matches)")
+            if kind not in (fam, "empty"):
+                raise ValueError(f"{folder}: {p.name} is named like {hit[1]} output but holds {kind} output")
+            outputs.append((p.name[: -len(hit[0])], p, hit[1]))
             continue
-        m = SINGLE_RE.match(p.name)
-        if m:
-            singles[m["sample"]] = p
-    samples = []
+        for rx in PAIRED_RES:
+            m = rx.match(p.name)
+            if m:
+                mates = pairs.setdefault(m["sample"], {})
+                if m["mate"] in mates:
+                    raise ValueError(f"{folder}: two mate-{m['mate']} files for sample {m['sample']}: "
+                                     f"{mates[m['mate']].name} and {p.name}")
+                mates[m["mate"]] = p
+                break
+        else:
+            m = SINGLE_RE.match(p.name)
+            if m:
+                if m["sample"] in singles:
+                    raise ValueError(f"{folder}: two read files for sample {m['sample']}: {singles[m['sample']].name} "
+                                     f"and {p.name}; keep one")
+                singles[m["sample"]] = p
+    samples: dict[str, Sample] = {}
     for name, mates in pairs.items():
         if "1" not in mates:
-            raise ValueError(f"{folder}: sample {name} has a mate-2 file but no mate-1 file")
-        samples.append(Sample(name, mates["1"], mates.get("2")))
+            raise ValueError(f"{folder}: sample {name} has a mate-2 file but no mate-1 file ({mates['2'].name})")
+        samples[name] = Sample(name, mates["1"], mates.get("2"))          # mate 1 alone: single-end
     for name, p in singles.items():
-        if name not in pairs:
-            samples.append(Sample(name, p))
+        if name in samples:
+            raise ValueError(f"{folder}: sample {name} has both paired files and a single file {p.name}")
+        samples[name] = Sample(name, p)
+    by_sample: dict[str, list] = {}
+    for name, p, clf in outputs:
+        if name not in samples:
+            raise ValueError(f"{folder}: classifier output {p.name} matches no read files (no reads for sample "
+                             f"{name!r}); rename it to <sample> + extension, or use a sample sheet")
+        by_sample.setdefault(name, []).append((p, clf))
+    for name, cands in by_sample.items():
+        if len(cands) > 1:
+            raise ValueError(f"{folder}: sample {name} has more than one classifier output: "
+                             f"{', '.join(c[0].name for c in cands)}; keep one or use a sample sheet")
+        samples[name].classifier_output, samples[name].classifier = cands[0]
+    out = sorted(samples.values(), key=lambda s: s.name)
+    validate_samples(out)
+    return out
+
+
+def detection_table(samples: list[Sample]) -> str:
+    """The sample-to-file matching, one line per sample (printed by `detect` and logged by `run`)."""
+    rows = [("sample", "R1", "R2", "classifier output", "classifier")]
     for s in samples:
-        for p in files:
-            low = p.name.lower()
-            if not low.startswith(s.name.lower()):
-                continue
-            rest = low[len(s.name):]
-            for ext, clf in CLASSIFIER_EXT.items():
-                if rest == ext and not _looks_like_report(p):
-                    s.classifier_output, s.classifier = p, clf
-    samples.sort(key=lambda s: s.name)
-    validate_samples(samples)
-    return samples
+        rows.append((s.name, Path(s.r1).name, Path(s.r2).name if s.r2 else "-",
+                     Path(s.classifier_output).name if s.classifier_output else "-", s.classifier))
+    width = [max(len(r[i]) for r in rows) for i in range(5)]
+    return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, width)).rstrip() for r in rows)
 
 
 def write_samplesheet(samples: list[Sample], path: str | Path) -> None:
-    with open(path, "w") as fo:
+    """Written through a unique temporary file and renamed into place: a link at `path` is replaced, never
+    followed, so the sheet can never overwrite an input."""
+    from .io_utils import staged
+    with staged(path) as tmp, open(tmp, "w") as fo:
         fo.write("sample\tr1\tr2\tclassifier_output\tclassifier\n")
         for s in samples:
             fo.write(f"{s.name}\t{Path(s.r1).resolve()}\t{Path(s.r2).resolve() if s.r2 else '.'}\t"

@@ -8,3 +8,20 @@ refs/
 *.log
 build/
 dist/
+
+# tool caches and editor/agent state (never part of the repository)
+graft/
+.cache/
+*.session.json
+.omk/
+.atl/
+.codex/
+.claude/
+.kimi/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store
+*.part
+*.part.gz
+.staging/
