@@ -106,11 +106,12 @@ def combine_imputations(results: list, alpha: float, method: str):
     """Rubin's rules over the ANCOM-BC2 result tables of the imputations, term by term (intercept left out).
 
     Every feature of any fit is reported. A feature without a finite estimate in every fit (filtered by prevalence,
-    a structural zero or a failed fit in some imputation) is not pooled: its p is set to 1 and it stays in the
-    multiple-testing adjustment, as ANCOM-BC2 does for a failed test. The complete-data degrees of freedom of each
-    feature are recovered from the fits' own t tests (W and p), so identical imputations reproduce ANCOM-BC2's
-    test. diff_robust: diff, and ANCOM-BC2's own diff_robust (significant and stable under its pseudo-count
-    sensitivity analysis) in at least half of the fits.
+    a structural zero or a failed fit in some imputation), or one that ANCOM-BC2 could not test in some fit (p = 1
+    with a nonzero W, which ANCOM-BC2 reports when the feature's degrees of freedom are NA), is not pooled: its p is
+    set to 1 and it stays in the multiple-testing adjustment, as ANCOM-BC2 does for a failed test. The
+    complete-data degrees of freedom of each feature are recovered from the fits' own t tests (W and p), so
+    identical imputations reproduce ANCOM-BC2's test. diff_robust: diff, and ANCOM-BC2's own diff_robust
+    (significant and stable under its pseudo-count sensitivity analysis) in at least half of the fits.
     """
     import numpy as np
     import pandas as pd
@@ -131,7 +132,11 @@ def combine_imputations(results: list, alpha: float, method: str):
         se = np.column_stack([r[f"se_{t}"].to_numpy(dtype=float) for r in rs])
         fin = np.isfinite(est) & np.isfinite(se) & (se > 0)
         if f"p_{t}" in base.columns:              # a fit whose own test failed is not a successful fit
-            fin &= np.column_stack([np.isfinite(r[f"p_{t}"].to_numpy(dtype=float)) for r in rs])
+            pf = np.column_stack([r[f"p_{t}"].to_numpy(dtype=float) for r in rs])
+            fin &= np.isfinite(pf)
+            if f"W_{t}" in base.columns:          # ANCOM-BC2 gives p = 1 when the feature's df is NA; W = 0 is a test
+                wf = np.column_stack([r[f"W_{t}"].to_numpy(dtype=float) for r in rs])
+                fin &= ~((pf >= 1) & np.isfinite(wf) & (wf != 0))
         n_fits = fin.sum(axis=1)
         est = np.where(fin, est, np.nan)
         dfc = np.full(len(ids), np.inf)
@@ -205,7 +210,8 @@ def _fit_imputations(args, cmd: list, cp: dict, imp_files: list, stage: Path, ou
     with open(stage / "mi_results.tsv", "w") as fo:
         fo.write(f"# ANCOM-BC2 on {n} imputations of the ambiguous reads, combined with Rubin's rules "
                  f"(T = W + (1 + 1/M) B; t reference with Barnard-Rubin df from each feature's complete-data df); "
-                 f"p adjusted with {args.p_adjust} per term, with p = 1 for a feature not estimable in every fit; "
+                 f"p adjusted with {args.p_adjust} per term, with p = 1 for a feature not estimated and tested in "
+                 "every fit; "
                  "fmi = share of the variance due to the read assignment; diff_robust: diff and ANCOM-BC2's "
                  "diff_robust in at least half of the fits\n")
         combined.to_csv(fo, sep="\t", index=False)

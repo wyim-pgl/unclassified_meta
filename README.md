@@ -1042,8 +1042,9 @@ and each side (taxa, panel) has its own random stream. `da --imputations` fits A
 combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
 complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
 ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
-comes from the assignment. A feature that is not estimable in every fit (filtered, structural zero, failed fit)
-gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
+comes from the assignment. A feature that is not estimable in every fit (filtered, structural zero, failed fit, or
+a test ANCOM-BC2 could not run, which it reports as p = 1 with a nonzero W because the degrees of freedom are
+NA) gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
 The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
 every fit is not tested, exactly as in a single ANCOM-BC2 run.
 `diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.

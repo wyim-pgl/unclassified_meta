@@ -29,7 +29,9 @@
   - LCA의 Rattail cactus necrosis associated virus 패널 행 2개(robust)는 EM에서 Tobamovirus muricaudae로 collapse됨(같은 종, ICTV 이명).
   - EM에만 나온 것: Tobamovirus cacti·Citrus yellow vein-associated virus — LCA에서는 한 조건 전체가 0이라 ANCOM-BC2가 NA, EM은 0.33·0.50 리드의 분수 배정이 완전 분리를 깨서 유한 LFC가 나옴. Sclerotinia nivalis(LCA 3 리드 → EM 329, P353 macho rep2·3에 집중), Alternaria incomplexa(LFC 부호 반대), Penicillium malachiteum, Alternaria arbusti.
 - 속(G): LCA 2,853 / 7 / 4; EM 기대값 3,081 / 5 / 2; 양쪽 추정 가능 2,295개 LFC Pearson 0.893.
-- 속(G) EM-MI: 3,486 / q<0.05 **70** / robust 1(Tobamovirus). 70개 중 65개 이상은 MI 결합 버그(ISSUE #0). Parastagonospora는 fmi 0.66으로 q=1(LCA q 0.0006) — 배정 불확실성이 크게 반영된 정상 동작. fmi 중앙값 0.24, 90분위 0.79.
+- 속(G) EM-MI(잡이 봉인한 결과, 고치기 전 코드): 3,486 / q<0.05 70 / robust 1 — MI 결합 버그(ISSUE Resolved 2026-11-19).
+- 속(G) EM-MI 재결합(고친 코드, `OSD18/RNA/repool_fix/mi_results_G.tsv`): 결합된 특징 1,656, q<0.05 **2**(Tobamovirus robust, LFC −8.09, fmi 0.07; Ophiobolus LFC 3.91, q 0.038), fmi 중앙값 0.21, 90분위 0.70.
+  - LCA 유의 항목의 MI 값: Ampelomyces q 0.059(fmi 0.08, robust_frac 1.0), Carlavirus q 0.25, Parastagonospora q 1(fmi 0.66, df 2.7), Neocucurbitaria q 1(fmi 0.79). 배정에 따라 결과가 바뀌는 속은 MI에서 유의하지 않다.
 - potexvirus-like 4개 점검(`RNA/potex_check/`): 특징 간 동일성 92–98 %, Spearman 0.88–0.99 → 같은 종.
 
 ## 시뮬레이션
@@ -37,6 +39,6 @@
 - 결과(alt 5·null 3): 세 방법 편향 유사(changed LFC 편향 LCA 0.091, EM 0.081, MI 0.083), 변화 없는 종 coverage LCA 97.1 %, EM 96.5 %, MI 99.4 %, 검정력 LCA 10 %, EM 6.7 %, MI 0 %(그룹당 6 샘플), global-null FDR 모두 0. 시뮬레이션 FMI 중앙값 0.001로 실데이터(0.24)보다 훨씬 작음 → 시뮬레이션의 모호성 구조가 실데이터를 대표하지 못함.
 
 ## 다음 단계
-1. ISSUE #0(MI 결합의 p=1 처리) 수정 + 회귀 테스트 → 저장된 fit으로 G·S MI 재결합.
-2. S em DA·DNA 완료 후 `OSD18/cmp_da.py RNA|DNA`로 재비교.
+1. S em DA(6272794)·DNA DA 완료 후 `OSD18/repool.py <RNA|DNA> <S|G>`로 고친 코드 기준 MI 재결합, `cmp_da.py`로 재비교.
+2. MI 수정 커밋 후 Pronghorn `em_code/`를 갱신해 이후 잡이 고친 코드를 쓰게 한다(실행 중 잡이 끝난 뒤).
 3. 시뮬레이션 연장 결과 확인·복사, TODO.md 나머지.

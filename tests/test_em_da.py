@@ -113,3 +113,14 @@ def test_da_imputations_needs_imputation_tables(tmp_path, monkeypatch):
                                       "--imputations", "-o", str(tmp_path / "da")])
     with pytest.raises(Exception, match="holds 0 imputation"):
         da.run_ancombc2(args)
+
+
+def test_a_fit_ancombc2_could_not_test_stays_untested_after_pooling():
+    # ANCOM-BC2 reports p = 1 with a large W when a feature's degrees of freedom are NA (p_hat[is.na(p_hat)] = 1)
+    fits = [result([4.3, 0.0], [0.2, 0.5]).assign(**{"W_groupB": [21.5, 0.0], "p_groupB": [1.0, 1.0]})
+            for _ in range(4)]
+    out, _ = da.combine_imputations(fits, 0.05, "holm")
+    row = out.set_index("feature_id")
+    assert row.loc["f1", "n_fits_groupB"] == 0 and row.loc["f1", "p_groupB"] == 1.0
+    assert not bool(row.loc["f1", "diff_groupB"]) and not bool(row.loc["f1", "diff_robust_groupB"])
+    assert row.loc["f2", "n_fits_groupB"] == 4               # W = 0, p = 1 is an ordinary test
