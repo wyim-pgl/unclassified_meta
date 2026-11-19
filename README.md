@@ -1231,3 +1231,10 @@ Ideas for the reversed-read control, score thresholds for Centrifuger output, si
 random-effect support were contributed by Eli Holschbach.
 
 License: MIT. Contact: Won Yim (wyim@unr.edu).
+
+## Development notes
+
+For contributors and coding agents: the current state, intent and open items of ongoing work are in
+[`resume.md`](resume.md), [`INTENTION.md`](INTENTION.md), [`TODO.md`](TODO.md), [`ISSUE.md`](ISSUE.md),
+[`QUARANTINE.md`](QUARANTINE.md) (approaches already tried and rejected) and [`AGENTS.md`](AGENTS.md)
+(working rules).
