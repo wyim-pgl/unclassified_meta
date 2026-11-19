@@ -45,7 +45,9 @@ The interactive version (`figures/sankey_all_samples.html`) shows the exact numb
 9. [Memory, time and disk](#9-memory-time-and-disk)
 10. [Differential abundance of viruses / selected taxa (panel workflow)](#10-differential-abundance-of-viruses--selected-taxa-panel-workflow)
     (with [repeated measures](#repeated-measures---rand-formula) and
-    [the classifier's taxa in the same table](#adding-the-classifiers-taxa-taxa-table))
+    [the classifier's taxa in the same table](#adding-the-classifiers-taxa-taxa-table),
+    [reads that fit several taxa](#reads-that-fit-several-taxa-em-and-multiple-imputation) and
+    [one organism, one feature](#one-organism-one-feature-panel-taxonomy))
 11. [Checking classifier thresholds with reversed control reads](#11-checking-classifier-thresholds-with-reversed-control-reads)
 12. [Troubleshooting / FAQ](#12-troubleshooting--faq)
 13. [Tools and citations](#13-tools-and-citations)
@@ -998,6 +1000,90 @@ What remains to keep in mind:
   for that feature; differences that vary from sample to sample do.
 - Names in the reports are labels. IDs are `namespace|taxID|rank`; a taxID is only meaningful together with
   the index it came from. There is no translation between NCBI and GTDB names.
+
+### Reads that fit several taxa: EM and multiple imputation
+
+Centrifuger run with `-k` > 1 reports every equally good taxon of a read on its own line, and a panel fragment can
+align equally well to two features. How such a read is counted changes the result:
+
+| treatment | used by | bias |
+|---|---|---|
+| lowest common ancestor | `taxa-table --per-read` default, Centrifuger `-k 1` | the read leaves the rank; closely related taxa lose reads |
+| even split | the read-count column of `centrifuger-quant` | a rare relative gains reads from a common one |
+| not counted | `panel-quant` default (ledger `ambiguous`) | close relatives lose reads |
+| **EM share** | `--assign em` / `--ambiguous em` | each read is shared by the estimated abundance of its candidates |
+
+With `--assign em` (taxa-table) or `--ambiguous em` (panel-quant), reads with the same candidate set are grouped and
+the maximum-likelihood proportions are found by EM, learnt mainly from the reads that fit one candidate. Reads of a
+dropped lineage, above the rank or not in the taxonomy (taxa-table) and decoys (panel-quant) compete as candidates,
+so no read is forced onto a taxon. This is the E-step of `centrifuger-quant`'s abundance EM, applied to read counts
+without genome-length scaling (`centrifuger-quant` 1.2.0 uses its EM for the abundance column only and splits the
+read counts evenly). The tables then hold expected reads, with six decimals; ANCOM-BC2 accepts non-integer counts.
+
+The expected counts are one estimate, and a test on them treats the shares as if they were observed: a taxon with
+0.01 expected reads in every sample counts as present everywhere for ANCOM-BC2's prevalence filter and
+structural-zero check. Use that fit as a quick look; the combined test below is the result to report.
+
+How the expected counts are computed: candidates that share reads form independent groups. A group whose read
+classes are laminar (any two classes disjoint or nested; on real Centrifuger output most groups) has a closed-form
+maximum-likelihood solution, the Dirichlet tree. Any other group is fitted by EM accelerated with SQUAREM until its
+log-likelihood is certified to be within 0.5 of its maximum (tangent-plane bound of the concave likelihood); where
+the likelihood is that flat, the data do not pin the counts down any closer, and the imputations show it.
+
+`--imputations M` writes M integer tables drawn from the posterior of the assignment (Jeffreys Dirichlet prior,
+0.5 per candidate), so the tables carry both the uncertainty of which candidate a read came from and of the
+proportions themselves. Laminar groups are drawn exactly from their Dirichlet-tree posterior (shared reads carry
+no information on how the candidates below them divide, so e.g. one A-only read among a million A/B reads gives
+B the Beta(0.5, 1.5) posterior share). Groups with crossing classes use a data-augmentation chain (500 sweeps)
+started by sampling-importance-resampling from the exact posterior of their largest-read laminar part, weighted
+by the likelihood of the crossing classes; when those crossing classes hold very many reads the start, and with
+it the draws, are approximate. `fmi` and the per-imputation results show how much the assignment matters. Each sample
+and each side (taxa, panel) has its own random stream. `da --imputations` fits ANCOM-BC2 on every table and
+combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
+complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
+ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
+comes from the assignment. A feature that is not estimable in every fit (filtered, structural zero, failed fit)
+gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
+The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
+every fit is not tested, exactly as in a single ANCOM-BC2 run.
+`diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.
+
+```bash
+# taxa: Centrifuger -k 5 output, EM shares, 10 imputations
+unclassified-meta taxa-table --reports reports.tsv --per-read --nodes cfr_nr.nodes.dmp --names cfr_nr.names.tsv \
+    --taxonomy-name cfr_nr_2026 --min-score 64 --rank S --drop-lineage Viridiplantae,Metazoa \
+    --assign em --imputations 10 --merge-panel quant/counts.tsv --panel-taxonomy ptx/panel_taxonomy.tsv -o taxa_S
+# panel: same treatment for fragments that tie between features
+unclassified-meta panel-quant --panel panel --input-dir results/unclassified_reads --ambiguous em --imputations 10 -o quant
+# test: the expected table plus every imputation, combined
+unclassified-meta da --counts taxa_S/merged/counts.tsv --features taxa_S/merged/features.tsv --metadata meta.tsv \
+    --group condition --reference-level healthy --formula "condition + plant" --imputations -o da_S
+```
+
+Give both sides the same number of `--imputations` (the seeds may differ). A side counted without EM (LCA, or the
+panel ledger policy) has no assignment uncertainty and contributes its one table to every imputation; a side
+counted with EM but without imputations is refused by the merge. `--p-adjust` with `--imputations` accepts holm,
+BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
+below 0.3); use 20 or more when it is larger.
+
+### One organism, one feature: `panel-taxonomy`
+
+A panel feature holds reads the classifier did not assign; the same organism often also has classified reads in a
+background taxon row. Without a link, `da` tests it twice (e.g. contigs labelled "Cactus virus X-like" at 70 %
+identity and the classified taxon Opuntia potexvirus A). `panel-taxonomy` classifies the panel's own sequences
+with the index used for the reads and gives each feature the deepest taxon that holds at least 80 % of its
+classified sequence length (`--min-support`), when at least half of its length was classified (`--min-classified`).
+`taxa-table --merge-panel --panel-taxonomy` then adds a feature assigned at or below `--rank` to that taxon's row
+(only for a panel counted on the unclassified reads; with all reads counted it is refused):
+the two sides hold disjoint reads, so the row is the organism's total. Features without a taxon at the rank stay
+features; `merged/collapsed.tsv` lists every panel feature with its outcome and reads.
+
+```bash
+unclassified-meta panel-taxonomy --panel panel --write-fasta panel_targets.fa
+centrifuger -x cfr_nr -k 5 -u panel_targets.fa -t 16 > panel_targets.cfr.tsv        # the reads' index and -k
+unclassified-meta panel-taxonomy --panel panel --classified panel_targets.cfr.tsv \
+    --nodes cfr_nr.nodes.dmp --names cfr_nr.names.tsv -o ptx
+```
 
 ### Real-data check (2026-11-18)
 

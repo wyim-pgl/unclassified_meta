@@ -213,7 +213,7 @@ def test_readme_control_recipe_runs_as_written(tmp_path):
             ids = [l[1:].split()[0] for i, l in enumerate(fh) if i % 4 == 0]
         out = tmp_path / c_out
         out.write_text(CFR_HEADER + "".join(cfr(i, 0, 0, 0) for i in ids))
-    c_out = re.search(r"> (\S+\.cfr\.tsv)", text).group(1)
+    c_out = re.search(r"> (\S+\.cfr\.tsv)", "\n".join(cmds)).group(1)       # the recipe's own output file
     run_readme(cmds, tmp_path, centrifuger)
     for documented in re.findall(r"`(control_summary/[\w.]+\.(?:tsv|png))`", text):
         assert (tmp_path / documented).exists(), documented

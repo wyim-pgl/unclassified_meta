@@ -34,7 +34,8 @@ import yaml
 from . import __version__
 from . import manifest
 from .config import Sample, check_sample_names
-from .fragments import (AMBIGUOUS, AMBIGUOUS_DECOY, DECOY_MIXED, DECOY_PREFIX, UNMAPPED, count_features,
+from .fragments import (AMBIGUOUS, AMBIGUOUS_DECOY, DECOY_MIXED, DECOY_PREFIX, UNMAPPED, count_classes, count_features,
+                        outcome_of_class,
                         run_bowtie2)
 from .io_utils import make_staging_dir, open_text, read_fasta, refuse_overlap, remove_staging_dir, staged
 from .runner import StepError, file_id, params_key, require, sh
@@ -615,13 +616,15 @@ def verify_panel(panel: Path) -> dict:
 QUANT_ARTIFACTS = ("counts.tsv", "ledger.tsv", "features.tsv")
 
 
-def write_quant_provenance(qdir: Path, record: dict) -> None:
+def write_quant_provenance(qdir: Path, record: dict, extra: list | None = None) -> None:
     """Seal the published quant tables: provenance.json (the generation manifest) is written last. The extract
-    summary the counts are reconciled with is recorded with its checksum (verified by the merge)."""
+    summary the counts are reconciled with is recorded with its checksum (verified by the merge). `extra`: further
+    files (relative paths), e.g. the imputation tables."""
     qdir = Path(qdir)
     if record.get("input_summary"):
         record = {**record, "input_summary_sha256": manifest.sha256(record["input_summary"])}
-    manifest.seal(qdir, [n for n in QUANT_ARTIFACTS if (qdir / n).exists()], record, name="provenance.json")
+    manifest.seal(qdir, [n for n in QUANT_ARTIFACTS if (qdir / n).exists()] + list(extra or []), record,
+                  name="provenance.json")
 
 
 def verify_quant(qdir: Path) -> dict:
@@ -653,14 +656,45 @@ def detect_reads_scope(samples: list[Sample]) -> tuple[str, Path | None]:
     return "all", None
 
 
+AMBIGUOUS_MODES = ("ledger", "em")
+
+
+def _ledger_policy(classes: dict) -> tuple[dict, dict]:
+    """(fragments per feature, ledger outcomes) under the 'feature' policy, from the fragment classes."""
+    feats, ledger = Counter(), Counter()
+    for cls, n in classes.items():
+        o = outcome_of_class(cls)
+        if o in (UNMAPPED, AMBIGUOUS, AMBIGUOUS_DECOY, DECOY_MIXED) or o.startswith(DECOY_PREFIX):
+            ledger[o] += n
+        else:
+            feats[o] += n
+    return dict(feats), dict(ledger)
+
+
 def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8, max_alignments: int = 10,
-             preset: str = "--sensitive", reads_scope: str = "auto", input_summary: str | Path | None = None) -> Path:
+             preset: str = "--sensitive", reads_scope: str = "auto", input_summary: str | Path | None = None,
+             ambiguous: str = "ledger", imputations: int = 0, seed: int = 1) -> Path:
     """Count every fragment of every sample once. Writes counts.tsv, ledger.tsv, features.tsv, provenance.json.
 
     reads_scope records what the input reads are: 'all' reads of the samples, or the 'unclassified' reads written
     by `extract` (the reads a classifier did not assign, plus low-score reads). `taxa-table --merge-panel` needs it
     to know whether the panel and the classifier's taxa were counted on the same or on disjoint reads.
+
+    ambiguous 'ledger' (default): a fragment whose best alignments fall in several features (or in features and
+    decoys) is booked in the ledger and counted for none. 'em': it is shared among those candidates, decoys
+    included, in proportion to their maximum-likelihood abundance in the sample (em.py); the counts are then
+    expected fragments with 6 decimals, and `imputations` > 0 also writes that many integer tables drawn from the
+    posterior assignment (imputations/counts_NNN.tsv, ledger_NNN.tsv) for `da --imputations`.
     """
+    from . import em
+    import numpy as np
+    if ambiguous not in AMBIGUOUS_MODES:
+        raise ValueError(f"--ambiguous must be one of {', '.join(AMBIGUOUS_MODES)}")
+    imputations = int(imputations or 0)
+    if int(seed) < 0:
+        raise ValueError("--seed must be 0 or a positive whole number")
+    if imputations < 0 or (imputations and ambiguous != "em"):
+        raise ValueError("--imputations needs --ambiguous em and a positive number")
     panel, outdir = Path(panel), Path(outdir)
     if reads_scope not in ("auto", "all", "unclassified"):
         raise ValueError("--reads-scope must be auto, all or unclassified")
@@ -681,6 +715,10 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
     prov = verify_panel(panel)
     outdir.mkdir(parents=True, exist_ok=True)
     # unpublish the previous result first: until the new provenance is written, nothing may use these tables
+    if (outdir / "imputations").is_symlink():
+        raise ValueError(f"{outdir / 'imputations'} is a link; the imputation tables must be written inside the "
+                         "output folder itself")
+    previous = manifest.previous_artifacts(outdir, "provenance.json")
     manifest.begin(outdir, "panel-quant", name="provenance.json")
     feats = pd.read_csv(panel / "features.tsv", sep="\t")
     seq2feature = load_seq2feature(panel)
@@ -689,8 +727,9 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
     options = f"{preset} -k {int(max_alignments)}"
     counts, ledger_rows = {}, []
     decoy_classes = sorted({v for v in seq2feature.values() if v.startswith(DECOY_PREFIX)})
+    fits, inputs, em_info = {}, {}, {}
     for s in samples:
-        key = params_key("panel-quant", prov["panel_id"], file_id(s.r1), file_id(s.r2), options)
+        key = params_key("panel-quant", "classes-v1", prov["panel_id"], file_id(s.r1), file_id(s.r2), options)
         cache = work / f"{s.name}.json"
         rec = json.loads(cache.read_text()) if cache.exists() else None
         if rec is not None and rec.get("key") != key:
@@ -698,14 +737,30 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
             rec = None
         if rec is None:
             res = run_bowtie2(panel / "index" / "panel", s.r1, s.r2, work / f"{s.name}.bowtie2.log", threads,
-                              options, lambda fh: count_features(fh, seq2feature))
-            fcounts, ledger, seen = res["result"]
+                              options, lambda fh: count_classes(fh, seq2feature))
+            classes, seen = res["result"]
             if res["input_reads"] is not None and res["input_reads"] != seen:
                 raise StepError(f"{s.name}: {seen} fragments in the SAM stream but Bowtie 2 read {res['input_reads']}")
-            rec = {"key": key, "sample": s.name, "input_fragments": seen, "features": dict(fcounts),
-                   "ledger": dict(ledger), "wall_s": res["wall_s"], "max_rss_gb": res["max_rss_gb"]}
+            rec = {"key": key, "sample": s.name, "input_fragments": seen,
+                   "classes": [[list(c), n] for c, n in sorted(classes.items())],
+                   "wall_s": res["wall_s"], "max_rss_gb": res["max_rss_gb"]}
             cache.write_text(json.dumps(rec))
-        assigned = sum(rec["features"].values())
+        classes = {tuple(c): n for c, n in rec["classes"]}
+        inputs[s.name] = (rec["input_fragments"], classes.get((), 0))
+        rec["features"], rec["ledger"] = _ledger_policy(classes)
+        shared = 0
+        if ambiguous == "em":
+            mapped = {c: n for c, n in classes.items() if c}
+            fit = em.expected_counts(mapped)
+            if not fit.converged:
+                raise StepError(f"{s.name}: the EM assignment did not converge in {fit.iterations} iterations")
+            fits[s.name] = (mapped, fit)
+            shared = sum(n for c, n in mapped.items() if len(c) > 1)
+            rounded = em.round_preserving(fit.counts, 6)     # the written shares add up to the mapped fragments
+            rec["features"] = {t: v for t, v in rounded.items() if not t.startswith(DECOY_PREFIX)}
+            rec["ledger"] = {**{t: v for t, v in rounded.items() if t.startswith(DECOY_PREFIX)},
+                             UNMAPPED: classes.get((), 0)}
+        assigned = round(sum(rec["features"].values()), 6)
         row = {"sample": s.name, "paired": s.paired, "input_fragments": rec["input_fragments"],
                "assigned_to_features": assigned, AMBIGUOUS: rec["ledger"].get(AMBIGUOUS, 0),
                AMBIGUOUS_DECOY: rec["ledger"].get(AMBIGUOUS_DECOY, 0)}
@@ -714,8 +769,11 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
         row[DECOY_MIXED] = rec["ledger"].get(DECOY_MIXED, 0)
         row[UNMAPPED] = rec["ledger"].get(UNMAPPED, 0)
         outcomes = sum(v for k, v in row.items() if k not in ("sample", "paired", "input_fragments"))
-        if outcomes != rec["input_fragments"]:
+        if abs(outcomes - rec["input_fragments"]) > (1e-6 * (len(feats) + len(decoy_classes) + 10)
+                                                     if ambiguous == "em" else 0):
             raise StepError(f"{s.name}: outcomes sum to {outcomes}, input fragments {rec['input_fragments']}")
+        em_info[s.name] = {"shared_fragments": shared, "iterations": fits[s.name][1].iterations,
+                           "converged": fits[s.name][1].converged} if ambiguous == "em" else None
         row["wall_s"], row["max_rss_gb"] = rec["wall_s"], rec["max_rss_gb"]
         ledger_rows.append(row)
         counts[s.name] = rec["features"]
@@ -724,12 +782,43 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
         unknown = set(counts[s.name]) - set(feats["feature_id"])
         if unknown:
             raise StepError(f"{s.name}: counts for features missing from features.tsv: {sorted(unknown)[:3]}")
-        table[s.name] = [int(counts[s.name].get(f, 0)) for f in feats["feature_id"]]
+        value = (lambda v: round(float(v), 6)) if ambiguous == "em" else int
+        table[s.name] = [value(counts[s.name].get(f, 0)) for f in feats["feature_id"]]
     stage = make_staging_dir(outdir, "panel-quant")
-    table.to_csv(stage / "counts.tsv", sep="\t", index=False)
+    table.to_csv(stage / "counts.tsv", sep="\t", index=False, float_format="%.6f" if ambiguous == "em" else None)
     pd.DataFrame(ledger_rows).to_csv(stage / "ledger.tsv", sep="\t", index=False)
     feats.to_csv(stage / "features.tsv", sep="\t", index=False)
-    for name in QUANT_ARTIFACTS:
+    imp_names = []
+    if imputations:
+        (stage / "imputations").mkdir()
+    draws = {}
+    for si, s in enumerate(samples):
+        if not imputations:
+            break
+        mapped, fit = fits[s.name]
+        # one independent stream per sample, and a different one from taxa-table's (side 2 = panel)
+        draws[s.name] = em.imputations(mapped, fit, imputations, np.random.default_rng([int(seed), 2, si]))
+    for m in range(imputations):
+        it = pd.DataFrame({"feature_id": feats["feature_id"]})
+        irows = []
+        for s in samples:
+            draw = draws[s.name][m]
+            it[s.name] = [int(draw.get(f, 0)) for f in feats["feature_id"]]
+            total, unmapped = inputs[s.name]
+            irow = {"sample": s.name, "imputation": m + 1, "seed": int(seed), "input_fragments": total,
+                    "assigned_to_features": int(it[s.name].sum()),
+                    **{d: int(draw.get(d, 0)) for d in decoy_classes}, UNMAPPED: unmapped}
+            if irow["assigned_to_features"] + sum(irow[d] for d in decoy_classes) + unmapped != total:
+                raise StepError(f"{s.name}: imputation {m + 1} does not keep every fragment")
+            irows.append(irow)
+        for kind, df in (("counts", it), ("ledger", pd.DataFrame(irows))):
+            name = f"imputations/{kind}_{m + 1:03d}.tsv"
+            df.to_csv(stage / name, sep="\t", index=False)
+            imp_names.append(name)
+    manifest.remove_stale(outdir, previous, imp_names)
+    if imp_names:
+        (outdir / "imputations").mkdir(exist_ok=True)
+    for name in list(QUANT_ARTIFACTS) + imp_names:
         os.replace(stage / name, outdir / name)
     remove_staging_dir(stage)
     write_quant_provenance(outdir, {
@@ -737,9 +826,13 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
          "panel": prov, "bowtie2_options": options, "counting_unit": "fragment (read pair or single read)",
          "reads_scope": reads_scope,
          "input_summary": str(Path(input_summary).resolve()) if input_summary else None,
-         "policy": "a fragment counts once for a feature when every reported alignment of either mate falls in "
-                   "that feature; otherwise it goes to one ledger outcome",
-         "samples": {s.name: {"r1": file_id(s.r1), "r2": file_id(s.r2)} for s in samples}})
+         "policy": ("a fragment counts once for a feature when every reported alignment of either mate falls in "
+                    "that feature; otherwise it goes to one ledger outcome") if ambiguous == "ledger" else
+                   ("a fragment whose best alignments fall in several features/decoys is shared among them by EM "
+                    "(expected counts)"),
+         "ambiguous": ambiguous, "imputations": imputations,
+         **({"em": em_info} if ambiguous == "em" else {}), **({"seed": int(seed)} if imputations else {}),
+         "samples": {s.name: {"r1": file_id(s.r1), "r2": file_id(s.r2)} for s in samples}}, imp_names)
     log.info("counts: %s (%d features x %d samples); ledger: %s", outdir / "counts.tsv", len(feats), len(samples),
              outdir / "ledger.tsv")
     return outdir / "counts.tsv"

@@ -107,6 +107,40 @@ def feature_outcome(recs: list[tuple], seq2feature: dict[str, str]) -> str:
     return next(iter(decoys)) if len(decoys) == 1 else DECOY_MIXED
 
 
+def fragment_class(recs: list[tuple], seq2feature: dict[str, str]) -> tuple:
+    """The features and decoy classes of a fragment's best alignments, sorted (empty: unmapped)."""
+    out = set()
+    for ref in best_refs(recs):
+        feat = seq2feature.get(ref)
+        if feat is None:
+            raise KeyError(f"reference sequence {ref!r} is not in the sequence -> feature map")
+        out.add(feat)
+    return tuple(sorted(out))
+
+
+def count_classes(lines: Iterable[str], seq2feature: dict[str, str]) -> tuple[Counter, int]:
+    """(fragments per class of candidate features/decoys, number of fragments seen); class () = unmapped."""
+    classes: Counter = Counter()
+    n = 0
+    for recs in sam_fragments(lines, scores=True):
+        n += 1
+        classes[fragment_class(recs, seq2feature)] += 1
+    return classes, n
+
+
+def outcome_of_class(cls: tuple) -> str:
+    """The 'feature' policy outcome of a class: identical to feature_outcome() on the fragment it came from."""
+    targets = [c for c in cls if not c.startswith(DECOY_PREFIX)]
+    decoys = [c for c in cls if c.startswith(DECOY_PREFIX)]
+    if not targets and not decoys:
+        return UNMAPPED
+    if targets and decoys:
+        return AMBIGUOUS_DECOY
+    if targets:
+        return targets[0] if len(targets) == 1 else AMBIGUOUS
+    return decoys[0] if len(decoys) == 1 else DECOY_MIXED
+
+
 def count_primary(lines: Iterable[str]) -> tuple[Counter, int]:
     """(fragments per sequence, number of fragments seen) under the 'primary' policy."""
     counts: Counter = Counter()
