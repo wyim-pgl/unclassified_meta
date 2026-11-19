@@ -22,9 +22,9 @@ _최종 갱신: 2026-11-19. 작업 항목은 [TODO.md](TODO.md)._
 
 ## Waiting
 5. **main 병합 여부** — 사용자 결정 대기. `em-imputation`은 `p257-fixes` 위에 있음.
-6. **ccloop 런 `unclassified-meta-p257-20261118`이 blocked** (round 4, "Native process exited unsuccessfully"). 원래 목표(P257 테스트 보고)는 이후 수동으로 진행됨. 재개·종료 결정 필요.
 
 ## Resolved
+- 2026-11-19: ccloop 런 `unclassified-meta-p257-20261118`(round 4에서 blocked)을 사용자 지시로 종료(`stop`, phase stopped). P257 목표는 이 worktree에서 수동으로 이어 진행됨. 기록 `~/.local/state/ccloop/unclassified-meta-p257-20261118/ccloop.md`.
 - 2026-11-19: **MI 결합이 ANCOM-BC2의 p=1(검정 불가)을 무시함** — ANCOM-BC2는 특징의 dof가 NA면 W가 커도 p=1을 준다(`.ancombc2_core`: `p_hat[is.na(p_hat)] = 1`). `combine_imputations`는 df를 복원하지 못하면 ∞로 두고 p를 다시 계산해, 각 fit에서 검정 불가였던 특징이 유의해졌다(OSD18 RNA 속 수준 q<0.05 70개; Aedoeadaptatus는 모든 fit p=1인데 MI q 9e-57). 해결: p ≥ 1이고 W가 0이 아닌 유한값인 fit은 실패로 처리(`da.py` `combine_imputations`), 회귀 테스트 `test_a_fit_ancombc2_could_not_test_stays_untested_after_pooling`. 재결합 결과 q<0.05 70 → 2(Tobamovirus robust, Ophiobolus).
 - 2026-11-19: EM 실데이터 비수렴(샘플 20, 10만 반복) — 원인: 수치 잡음 step, 평평한 방향, `dominated()` 반복 호출. 해결: 성분별 닫힌 해(Dirichlet tree), 지배 후보 제거, 인증된 likelihood gap(0.5 nat) 정지, projected SQUAREM. 샘플 20: 95초 수렴.
 - 2026-11-19: 이전 OSD18 배치가 큐에 남아 있었음 — `scancel -n a,b,...`(쉼표 목록)이 아무것도 취소하지 않음. ID로 취소해 해결.

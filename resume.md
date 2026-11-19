@@ -5,7 +5,7 @@
 ## 위치
 - 작업 worktree: `/mnt/f/scratch/develop/unclassified_meta-p257fix` (브랜치 `em-imputation`, HEAD `cabe340`, 푸시됨, main 미병합). 이 핸드오프 파일 7개는 **미커밋**.
 - 브랜치: main `57448db` ← `p257-fixes` `776a488`(푸시) ← `em-imputation` `cabe340`(푸시).
-- 메인 checkout `/mnt/f/scratch/develop/unclassified_meta`: main, 미커밋 `wiki/`·`.ignore`(이 작업과 무관). ccloop 런이 이 폴더를 감시하다 blocked 상태.
+- 메인 checkout `/mnt/f/scratch/develop/unclassified_meta`: main, 미커밋 `wiki/`·`.ignore`(이 작업과 무관). ccloop 런 `unclassified-meta-p257-20261118`은 2026-11-19 사용자 지시로 종료(stopped).
 
 ## 한 일 (cabe340)
 - `src/unclassified_meta/em.py`: 성분별 EM(laminar = Dirichlet tree 닫힌 해, crossing = projected SQUAREM, 인증 gap ≤ 0.5 nat), 지배 후보 제거, imputation(laminar 정확 추출, crossing = SIR 시작 Gibbs 500 sweep), Rubin/Barnard–Rubin 결합, t 꼬리 계산, round_preserving.
