@@ -2,7 +2,7 @@
 # Differential abundance with ALDEx2 (aldex.clr + aldex.glm) for `unclassified-meta da-robustness`.
 #
 # Usage: Rscript aldex2.R --counts counts.tsv --metadata metadata.tsv --group group --outdir out \
-#          [--formula "group + batch"] [--reference-level control] [--alpha 0.05] [--p-adjust holm]
+#          [--formula "group + batch"] [--reference-level control] [--alpha 0.05] [--p-adjust BH]
 #          [--mc-samples 128] [--seed 1] [--threads 1] [--rand-formula "(1|unit)"]
 #
 # Writes outdir/results.tsv (feature_id, term, effect, se, ci_low, ci_high, stat, p, q, effect_definition),
@@ -22,7 +22,7 @@
 #  - no prevalence filter here: da-robustness filters the features in Python, once, for all methods.
 
 args <- commandArgs(trailingOnly = TRUE)
-opt <- list(formula = NULL, `reference-level` = NULL, alpha = "0.05", `p-adjust` = "holm", threads = "1",
+opt <- list(formula = NULL, `reference-level` = NULL, alpha = "0.05", `p-adjust` = "BH", threads = "1",
             outdir = "aldex2", `rand-formula` = NULL, seed = "1", `mc-samples` = "128")
 i <- 1
 while (i <= length(args)) {

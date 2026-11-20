@@ -579,7 +579,7 @@ def add_arguments_robustness(p) -> None:
     p.add_argument("--realization-fits", type=int, default=10, help="posterior realizations refitted (<= available)")
     p.add_argument("--resolution-table", help="multi_resolution_robustness.tsv from da-resolutions")
     p.add_argument("--alpha", type=float, default=0.05)
-    p.add_argument("--p-adjust", default="holm", help="multiple-testing adjustment of every method (per term)")
+    p.add_argument("--p-adjust", default="BH", help="multiple-testing adjustment of every method (per term; default BH, as `da`)")
     p.add_argument("--mc-samples", type=int, default=128, help="ALDEx2 Monte-Carlo Dirichlet instances")
     p.add_argument("--seed", type=int, default=1, help="seed of ALDEx2 and LinDA (ANCOM-BC2 uses its fixed seed)")
     p.add_argument("-t", "--threads", type=int, default=1, help="fits run in parallel (one R process each)")

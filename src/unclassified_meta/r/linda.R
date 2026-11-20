@@ -3,7 +3,7 @@
 #
 # Usage: Rscript linda.R --counts counts.tsv --metadata metadata.tsv --group group --outdir out \
 #          [--formula "group + batch"] [--reference-level control] [--rand-formula "(1|unit)"]
-#          [--alpha 0.05] [--p-adjust holm] [--threads 1] [--seed 1]
+#          [--alpha 0.05] [--p-adjust BH] [--threads 1] [--seed 1]
 #
 # Writes outdir/results.tsv (feature_id, term, effect, se, ci_low, ci_high, stat, p, q, effect_definition),
 # session_info.txt and warnings.txt.
@@ -17,7 +17,7 @@
 # accepted as they are (feature.dat.type = "count"); LinDA's winsorization of outliers (is.winsor, default) stays on.
 
 args <- commandArgs(trailingOnly = TRUE)
-opt <- list(formula = NULL, `reference-level` = NULL, alpha = "0.05", `p-adjust` = "holm", threads = "1",
+opt <- list(formula = NULL, `reference-level` = NULL, alpha = "0.05", `p-adjust` = "BH", threads = "1",
             outdir = "linda", `rand-formula` = NULL, seed = "1")
 i <- 1
 while (i <= length(args)) {
