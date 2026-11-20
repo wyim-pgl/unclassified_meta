@@ -95,14 +95,23 @@ def test_unidentified_proportions_are_not_fixed_at_the_even_split():
     assert np.std(draws) > 10
 
 
-def test_identical_imputations_give_the_complete_data_t_test():
+def test_identical_imputations_use_the_barnard_rubin_observed_degrees_of_freedom():
+    # nu_obs = nu (nu + 1) / (nu + 3) (1 - lambda) with lambda = 0: 4 * 5 / 7, as in mice's barnard.rubin
     r = em.rubin(np.array([[0.25, 0.25, 0.25]]), np.array([[0.1, 0.1, 0.1]]), df_complete=[4])
-    assert r["p"][0] == pytest.approx(0.06676, abs=2e-5)                 # 2 * pt(-2.5, 4)
+    assert r["df"][0] == pytest.approx(20 / 7)
+    assert r["p"][0] == pytest.approx(0.09192389, abs=1e-6)              # 2 * pt(-2.5, 20/7)
 
 
 def test_identical_decimal_estimates_count_as_identical():
     r = em.rubin(np.array([[0.1, 0.1, 0.1]]), np.array([[0.05, 0.05, 0.05]]), df_complete=[4])
-    assert r["df"][0] == 4 and r["p"][0] == pytest.approx(0.116117, abs=1e-5)
+    assert r["fmi_between"][0] == 0 and r["df"][0] == pytest.approx(20 / 7)
+    assert r["p"][0] == pytest.approx(0.14388810, abs=1e-6)              # 2 * pt(-2, 20/7)
+
+
+def test_degrees_of_freedom_do_not_jump_when_the_imputations_barely_disagree():
+    same = em.rubin(np.array([[0.25, 0.25, 0.25]]), np.array([[0.1, 0.1, 0.1]]), df_complete=[10])
+    near = em.rubin(np.array([[0.25, 0.25, 0.2500001]]), np.array([[0.1, 0.1, 0.1]]), df_complete=[10])
+    assert same["df"][0] == pytest.approx(10 * 11 / 13) and near["df"][0] == pytest.approx(same["df"][0], rel=1e-6)
 
 
 def test_a_fit_with_zero_standard_error_is_not_combined():

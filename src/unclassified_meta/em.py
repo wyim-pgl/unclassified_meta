@@ -575,8 +575,12 @@ def rubin(estimates: np.ndarray, ses: np.ndarray, df_complete=None) -> dict:
     """Combine M fits (features x M arrays of estimates and standard errors) with Rubin's rules.
 
     T = W + (1 + 1/M) B, W the mean within-fit variance and B the between-fit variance of the estimates.
-    Reference: t with Barnard & Rubin's (1999) degrees of freedom, which reduce to the complete-data degrees of
-    freedom `df_complete` (one per feature; inf = normal, the default) when the imputations agree.
+    Reference: t with Barnard & Rubin's (1999) degrees of freedom from the complete-data degrees of freedom
+    `df_complete` (one per feature; inf = normal, the default), the formula of mice's `barnard.rubin`:
+    nu = 1 / (1 / nu_m + 1 / nu_obs), with nu_m = (M - 1) / lambda^2 and
+    nu_obs = nu_com (nu_com + 1) / (nu_com + 3) (1 - lambda).
+    The same formula holds when the imputations agree (lambda = 0): nu = nu_obs = nu_com (nu_com + 1) / (nu_com + 3),
+    smaller than nu_com (8.46 for nu_com = 10), so the pooled test is a little more conservative than one fit's.
     A feature missing (NaN) from any fit is not combined (NaN).
     """
     est = np.asarray(estimates, dtype=float)
@@ -597,13 +601,11 @@ def rubin(estimates: np.ndarray, ses: np.ndarray, df_complete=None) -> dict:
         lam = (1 + 1 / m) * b / t if t > 0 else 0.0
         nc = nu_com[i]
         nu_m = (m - 1) / lam ** 2 if lam > 0 else math.inf
-        if lam == 0:
-            nu = nc                              # the imputations agree: the complete-data test itself
-        elif math.isinf(nc):
+        if math.isinf(nc):
             nu = nu_m
         else:
             nu_obs = (nc + 1) / (nc + 3) * nc * (1 - lam)
-            nu = 1 / (1 / nu_m + 1 / nu_obs) if nu_obs > 0 else 0.0
+            nu = (1 / (1 / nu_m + 1 / nu_obs) if math.isfinite(nu_m) else nu_obs) if nu_obs > 0 else 0.0
         z = qbar / math.sqrt(t) if t > 0 else (math.inf if qbar else float("nan"))
         q[i], t_se[i], df[i], fmi[i] = qbar, math.sqrt(t), nu, lam
         p[i] = two_sided_p(z, nu) if (not math.isnan(z) and nu > 1e-8) else 1.0
