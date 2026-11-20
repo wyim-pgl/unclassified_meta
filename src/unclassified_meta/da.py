@@ -106,7 +106,8 @@ def combine_imputations(results: list, alpha: float, method: str):
     """Rubin's rules over the ANCOM-BC2 result tables of the imputations, term by term (intercept left out).
 
     Every feature of any fit is reported. A feature without a finite estimate in every fit (filtered by prevalence,
-    a structural zero or a failed fit in some imputation) is not pooled: its p is set to 1 and it stays in the
+    a structural zero, a failed fit, or a test ANCOM-BC2 could not do - p = 1 with a non-zero W because the
+    feature's degrees of freedom are NA - in some imputation) is not pooled: its p is set to 1 and it stays in the
     multiple-testing adjustment, as ANCOM-BC2 does for a failed test. The complete-data degrees of freedom of each
     feature are recovered from the fits' own t tests (W and p), so identical imputations reproduce ANCOM-BC2's
     test. diff_robust: diff, and ANCOM-BC2's own diff_robust (significant and stable under its pseudo-count
@@ -131,7 +132,14 @@ def combine_imputations(results: list, alpha: float, method: str):
         se = np.column_stack([r[f"se_{t}"].to_numpy(dtype=float) for r in rs])
         fin = np.isfinite(est) & np.isfinite(se) & (se > 0)
         if f"p_{t}" in base.columns:              # a fit whose own test failed is not a successful fit
-            fin &= np.column_stack([np.isfinite(r[f"p_{t}"].to_numpy(dtype=float)) for r in rs])
+            pf = np.column_stack([r[f"p_{t}"].to_numpy(dtype=float) for r in rs])
+            fin &= np.isfinite(pf)
+            if f"W_{t}" in base.columns:
+                # ANCOM-BC2 sets p = 1 when a feature's degrees of freedom are NA (.ancombc2_core:
+                # p_hat[is.na(p_hat)] = 1): a non-zero W with p = 1 is a test that could not be done, not a null
+                # result, and pooling its estimate under a normal reference would make it significant
+                wf = np.column_stack([r[f"W_{t}"].to_numpy(dtype=float) for r in rs])
+                fin &= ~((pf >= 1.0) & np.isfinite(wf) & (np.abs(wf) > 0))
         n_fits = fin.sum(axis=1)
         est = np.where(fin, est, np.nan)
         dfc = np.full(len(ids), np.inf)

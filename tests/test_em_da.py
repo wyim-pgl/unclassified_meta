@@ -45,6 +45,20 @@ def test_a_feature_missing_from_one_fit_is_reported_with_p_1_and_counts_in_the_a
     assert row.loc["f1", "q_groupB"] == pytest.approx(min(1, 2 * row.loc["f1", "p_groupB"]))
 
 
+def test_a_fit_with_p_1_and_nonzero_w_is_a_failed_test_not_pooled_as_significant():
+    # ANCOM-BC2 reports p = 1 when the feature's degrees of freedom are NA, even when W is large (ISSUE #0)
+    fits = []
+    for _ in range(4):
+        r = result([5.0, 2.0], [0.2, 0.5])
+        r["W_groupB"], r["p_groupB"] = [25.0, 4.0], [1.0, 0.0001]
+        fits.append(r)
+    out, _ = da.combine_imputations(fits, 0.05, "holm")
+    row = out.set_index("feature_id")
+    assert row.loc["f1", "p_groupB"] == 1.0 and row.loc["f1", "n_fits_groupB"] == 0
+    assert not bool(row.loc["f1", "diff_groupB"])
+    assert row.loc["f2", "p_groupB"] < 0.05 and row.loc["f2", "n_fits_groupB"] == 4
+
+
 def test_combined_fit_widens_the_error_when_the_imputations_disagree():
     same = [result([2.0, 0.1], [0.5, 0.5]) for _ in range(5)]
     vary = [result([2.0 + d, 0.1], [0.5, 0.5]) for d in (-1.5, -0.7, 0, 0.7, 1.5)]
