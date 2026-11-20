@@ -3,7 +3,8 @@
 _최종 갱신: 2026-11-19. 작업 항목은 [TODO.md](TODO.md)._
 
 ## Blocker
-0. **MI 결합이 ANCOM-BC2의 p=1(검정 불가)을 무시함** — `src/unclassified_meta/da.py` `combine_imputations`(136–142행). ANCOM-BC2는 특징별 dof가 NA면 W가 커도 p=1을 준다(`.ancombc2_core`: `p_hat[is.na(p_hat)] = 1`). `em.df_from_p(W, 1)`이 NaN이라 dfc가 ∞로 떨어지고, MI가 정규분포로 p를 다시 계산해 각 fit에서 검정 불가였던 특징이 유의해진다.
+0. **[코드 수정됨 2026-11-19, worktree-additional — OSD18 재결합은 아직]** **MI 결합이 ANCOM-BC2의 p=1(검정 불가)을 무시함**
+   - 수정: `combine_imputations`가 p ≥ 1이고 W ≠ 0인 fit을 실패로 처리(MI p=1). 회귀 테스트 `tests/test_em_da.py::test_a_fit_with_p_1_and_nonzero_w_is_a_failed_test_not_pooled_as_significant`. 남은 일: 저장된 fit으로 OSD18 G·S MI 재결합. — `src/unclassified_meta/da.py` `combine_imputations`(136–142행). ANCOM-BC2는 특징별 dof가 NA면 W가 커도 p=1을 준다(`.ancombc2_core`: `p_hat[is.na(p_hat)] = 1`). `em.df_from_p(W, 1)`이 NaN이라 dfc가 ∞로 떨어지고, MI가 정규분포로 p를 다시 계산해 각 fit에서 검정 불가였던 특징이 유의해진다.
    - 영향: OSD18 RNA 속 수준 EM-MI q<0.05 70개(기대값 fit 5개). 예: Aedoeadaptatus 모든 fit p=1(W≈21, 리드 대부분 한 샘플 333개) → MI q 9e-57.
    - 해결안: fit의 p가 1이고 W가 유한하면(또는 모든 fit에서 df 복원 실패) 그 fit을 실패로 보고 MI p=1. 회귀 테스트 추가 후 저장된 fit(`da_*_em/imputations/`)으로 재결합.
    - 출처: 이 세션, `OSD18/cmp4.py`.
