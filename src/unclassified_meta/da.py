@@ -56,7 +56,8 @@ def verify_inputs(counts: str | Path, features: str | Path, unsealed_ok: bool = 
 
 # every file name the R script can write; a rerun removes the ones it did not write again
 DA_OUTPUT_PATTERNS = ("ancombc2_results.tsv", "structural_zeros.tsv", "session_info.txt", "warnings.txt", "*.png",
-                      "*.pdf")             # mi_results.tsv is removed only as a sealed output (manifest.remove_stale)
+                      "*.pdf")             # mi_results.tsv, mi_structural_zeros.tsv and the imputations/ files are
+                                           # removed only as sealed outputs (manifest.remove_stale)
 
 
 def p_adjust(p, method: str):
@@ -109,8 +110,8 @@ def combine_imputations(results: list, alpha: float, method: str):
     a structural zero or a failed fit in some imputation), or one that ANCOM-BC2 could not test in some fit (p = 1
     with a nonzero W, which ANCOM-BC2 reports when the feature's degrees of freedom are NA), is not pooled: its p is
     set to 1 and it stays in the multiple-testing adjustment, as ANCOM-BC2 does for a failed test. The
-    complete-data degrees of freedom of each feature are recovered from the fits' own t tests (W and p), so
-    identical imputations reproduce ANCOM-BC2's test. diff_robust: diff, and ANCOM-BC2's own diff_robust
+    complete-data degrees of freedom of each feature are recovered from the fits' own t tests (W and p) and enter
+    the Barnard-Rubin degrees of freedom (em.rubin), which stay below them even when the imputations agree. diff_robust: diff, and ANCOM-BC2's own diff_robust
     (significant and stable under its pseudo-count sensitivity analysis) in at least half of the fits.
     """
     import numpy as np
@@ -159,6 +160,74 @@ def combine_imputations(results: list, alpha: float, method: str):
     return out, terms
 
 
+def _true(values) -> "pd.Series":
+    """R logicals as written by write.table (TRUE/FALSE), or Python booleans, as booleans."""
+    import pandas as pd
+    return pd.Series(values).astype(str).str.strip().str.upper().isin(["TRUE", "1"])
+
+
+def read_structural_zeros(path) -> "pd.DataFrame":
+    """structural_zeros.tsv of one ANCOM-BC2 fit; identifiers and labels stay text."""
+    import pandas as pd
+    df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, quoting=3)
+    for c in ("absent_in_a_group", "flagged_by_ancombc2"):
+        if c in df.columns:
+            df[c] = _true(df[c]).to_numpy()
+    return df
+
+
+def combine_structural_zeros(frames: list) -> "pd.DataFrame":
+    """Per feature, how the structural-zero status varies over the fits of the imputations (one structural_zeros.tsv
+    per fit). A descriptive stability metric: it is never pooled into a p-value or an estimate.
+
+    One row per feature listed in any fit: n_fits (fits that list the feature, i.e. ANCOM-BC2 assessed it there),
+    n_fits_absent (fits in which it is absent from every retained sample of a group, absent_in_a_group),
+    frac_fits_absent, absent_in_groups (the group sets of the absent fits: "B" when all agree, else each set with its
+    number of fits, most frequent first, e.g. "B (3); A (1)"), absent_in_every_fit, inconsistent
+    (0 < n_fits_absent < n_fits) and, when the fits carry it, n_fits_flagged_by_ancombc2 (fits in which ANCOM-BC2
+    left the feature untested as a structural zero, which with --neg-lb also covers a negative lower bound).
+    """
+    import pandas as pd
+    from collections import Counter
+    seen: dict[str, dict] = {}
+    flagged_known = False
+    for fr in frames:
+        if fr is None or "feature_id" not in fr.columns:
+            continue
+        fr = fr.drop_duplicates("feature_id")
+        absent = _true(fr["absent_in_a_group"]) if "absent_in_a_group" in fr.columns else pd.Series(False, fr.index)
+        groups = (fr["absent_in_groups"] if "absent_in_groups" in fr.columns else pd.Series("", fr.index))
+        flagged = None
+        if "flagged_by_ancombc2" in fr.columns:
+            flagged_known = True
+            flagged = _true(fr["flagged_by_ancombc2"]).to_numpy()
+        labels = fr["label"] if "label" in fr.columns else pd.Series("", fr.index)
+        for i, (f, a, g, lab) in enumerate(zip(fr["feature_id"].astype(str), absent.to_numpy(),
+                                                groups.fillna("").astype(str), labels.fillna("").astype(str))):
+            r = seen.setdefault(f, {"label": "", "n": 0, "absent": 0, "sets": Counter(), "flagged": 0})
+            if not r["label"] and lab and lab != "NA":
+                r["label"] = lab
+            r["n"] += 1
+            if a:
+                r["absent"] += 1
+                r["sets"][g] += 1
+            if flagged is not None and flagged[i]:
+                r["flagged"] += 1
+    rows = []
+    for f, r in seen.items():
+        sets = sorted(r["sets"].items(), key=lambda kv: (-kv[1], kv[0]))
+        groups = sets[0][0] if len(sets) == 1 else "; ".join(f"{k} ({v})" for k, v in sets)
+        row = {"feature_id": f, "label": r["label"], "n_fits": r["n"], "n_fits_absent": r["absent"],
+               "frac_fits_absent": r["absent"] / r["n"], "absent_in_groups": groups,
+               "absent_in_every_fit": r["absent"] == r["n"], "inconsistent": 0 < r["absent"] < r["n"]}
+        if flagged_known:
+            row["n_fits_flagged_by_ancombc2"] = r["flagged"]
+        rows.append(row)
+    cols = ["feature_id", "label", "n_fits", "n_fits_absent", "frac_fits_absent", "absent_in_groups",
+            "absent_in_every_fit", "inconsistent"] + (["n_fits_flagged_by_ancombc2"] if flagged_known else [])
+    return pd.DataFrame(rows, columns=cols)
+
+
 def imputation_inputs(args, expected: dict) -> dict:
     """{imputation table: sha256} of the generation that sealed --counts, read from ONE manifest record that also
     vouches for the counts table itself (so the expected table and its imputations are one generation)."""
@@ -180,10 +249,12 @@ def imputation_inputs(args, expected: dict) -> dict:
 
 
 def _fit_imputations(args, cmd: list, cp: dict, imp_files: list, stage: Path, outdir: Path) -> list:
-    """Fit ANCOM-BC2 on every imputation table (private copies) and combine the fits (mi_results.tsv)."""
+    """Fit ANCOM-BC2 on every imputation table (private copies) and combine the fits (mi_results.tsv). With
+    --struc-zero each fit's structural_zeros.tsv is kept (imputations/structural_zeros_NNN.tsv) and summarised per
+    feature (mi_structural_zeros.tsv, see combine_structural_zeros)."""
     import pandas as pd
     rows = list(pd.read_csv(cp[str(args.counts)], sep="\t")["feature_id"])
-    results, made = [], []
+    results, made, sz_frames = [], [], []
     (stage / "imputations").mkdir()
     n = len(imp_files)
     for m, f in enumerate(imp_files):
@@ -206,7 +277,23 @@ def _fit_imputations(args, cmd: list, cp: dict, imp_files: list, stage: Path, ou
         res.to_csv(stage / name, sep="\t", index=False)
         results.append(res)
         made.append(name)
+        if args.struc_zero:                                     # kept as written by the fit, per imputation
+            sz = sub / "structural_zeros.tsv"
+            if not sz.is_file():
+                raise StepError(f"ANCOM-BC2 wrote no structural_zeros.tsv for imputation {m + 1} with --struc-zero")
+            name = f"imputations/structural_zeros_{m + 1:03d}.tsv"
+            shutil.copyfile(sz, stage / name)
+            sz_frames.append(read_structural_zeros(stage / name))
+            made.append(name)
     combined, terms = combine_imputations(results, float(args.alpha), args.p_adjust)
+    if args.struc_zero:
+        with open(stage / "mi_structural_zeros.tsv", "w") as fo:
+            fo.write(f"# structural zeros (ANCOM-BC2's own rule: count != 0 is present) of each of the {n} fits, "
+                     "per feature: a descriptive stability metric of the zero pattern over the imputations, not "
+                     "pooled into any p-value or estimate; a feature left untested as a structural zero in a fit "
+                     "is not pooled in mi_results.tsv (p = 1, no combined estimate); per-fit tables in "
+                     "imputations/structural_zeros_NNN.tsv\n")
+            combine_structural_zeros(sz_frames).to_csv(fo, sep="\t", index=False)
     with open(stage / "mi_results.tsv", "w") as fo:
         fo.write(f"# ANCOM-BC2 on {n} imputations of the ambiguous reads, combined with Rubin's rules "
                  f"(T = W + (1 + 1/M) B; t reference with Barnard-Rubin df from each feature's complete-data df); "
@@ -276,6 +363,8 @@ def run_ancombc2(args, inputs=()) -> Path:
         if getattr(args, "imputations", False):
             imp_made = _fit_imputations(args, cmd, cp, list(imp), stage, outdir)
             made.append("mi_results.tsv")
+            if args.struc_zero:
+                made.append("mi_structural_zeros.tsv")
         refuse_overlap([outdir / f for f in made], [*inputs, args.counts, args.features, args.metadata], "da")
         manifest.remove_stale(outdir, previous, imp_made + made)
         if imp_made:

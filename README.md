@@ -46,7 +46,8 @@ The interactive version (`figures/sankey_all_samples.html`) shows the exact numb
 10. [Differential abundance of viruses / selected taxa (panel workflow)](#10-differential-abundance-of-viruses--selected-taxa-panel-workflow)
     (with [repeated measures](#repeated-measures---rand-formula) and
     [the classifier's taxa in the same table](#adding-the-classifiers-taxa-taxa-table),
-    [reads that fit several taxa](#reads-that-fit-several-taxa-em-and-multiple-imputation) and
+    [reads that fit several taxa](#reads-that-fit-several-taxa-em-and-multiple-imputation),
+    [zeros and the evidence behind them](#zeros-with-em-counts-detection) and
     [one organism, one feature](#one-organism-one-feature-panel-taxonomy))
 11. [Checking classifier thresholds with reversed control reads](#11-checking-classifier-thresholds-with-reversed-control-reads)
 12. [Troubleshooting / FAQ](#12-troubleshooting--faq)
@@ -771,16 +772,25 @@ taxa/                 (taxa-table)
   counts.tsv          read counts, taxon x sample, at the chosen rank
   features.tsv        feature id (namespace|taxID|rank), name, lineage
   ledger.tsv          per sample: reads in the report, unclassified, dropped, kept, unresolved above the rank
+  unique_counts.tsv   only with --assign em: same rows and samples as counts.tsv, whole reads whose candidate set
+                      is that taxon alone (the evidence that does not depend on how shared reads are divided)
+  imputations/        only with --imputations: counts_NNN.tsv and ledger_NNN.tsv (whole reads, one per draw)
   merged/             (with --merge-panel) counts.tsv, features.tsv (column `source`: panel or background),
-                      merge_summary.tsv, reconciliation.tsv
+                      merge_summary.tsv, reconciliation.tsv (unique counts are not merged: they exist only in
+                      the taxa-table folder itself)
 da/
   ancombc2_results.tsv   one row per tested feature (lines starting with # give version, settings, the
                          random-effect structure and warnings)
   volcano.png/.pdf       effect size against significance
   feature_abundance.png/.pdf   share of each sample's assigned read pairs, per group, for the top features
-  structural_zeros.tsv   only with --struc-zero: features absent from every sample of a group (these are left
-                         out of the tests in ancombc2_results.tsv; the header says how many)
+  structural_zeros.tsv   only with --struc-zero: one row per feature ANCOM-BC2 assessed (columns below); the
+                         flagged ones are left out of the tests in ancombc2_results.tsv (the header says how many)
+  mi_results.tsv         only with --imputations: the fits combined with Rubin's rules
+  mi_structural_zeros.tsv  only with --imputations --struc-zero: how the zero pattern varies over the fits
+  imputations/           only with --imputations: ancombc2_results_NNN.tsv (and structural_zeros_NNN.tsv with
+                         --struc-zero), one per fit
   warnings.txt, session_info.txt
+detection/            (detection) detection_by_sample.tsv, detection_by_group.tsv, detection_summary.tsv
 ```
 
 **Reading `ancombc2_results.tsv`.** For a comparison "infected versus control" the columns end in
@@ -816,8 +826,19 @@ only viruses. Samples with very few `assigned_to_features` carry little informat
   split when its contigs match two references. Inspect the contigs of a significant feature before naming a
   species.
 - **No reads is not absence.** A feature with zero reads in a group may simply be below detection.
-  `--struc-zero` (treat it as truly absent) is therefore off by default. With it, such features are written to
-  `structural_zeros.tsv` instead of being tested.
+  `--struc-zero` (treat it as truly absent) is therefore off by default. With it, ANCOM-BC2 flags a feature in a
+  group when every retained sample of the group has count 0 (its own rule: a count != 0 is present), leaves the
+  flagged features out of the tests (no fold change, standard error or P value is produced for them) and the program
+  writes `structural_zeros.tsv`:
+  `feature_id`, `label`, ANCOM-BC2's own indicator per group (`structural_zero (<group> = L)`),
+  `flagged_by_ancombc2`, `absent_in_groups` / `absent_in_a_group` (groups in which every retained sample has count
+  0), and for every group level L, on the samples ANCOM-BC2 kept: `samples (<group> = L)`,
+  `present_samples (<group> = L)` (count != 0), `reads (<group> = L)` (sum, fractions kept) and
+  `max_count (<group> = L)`. With expected counts from EM (`--assign em`) a fraction of a shared read is a nonzero
+  count, so a group can count as present on 0.33 of a read; these columns show it, and
+  [`detection`](#zeros-with-em-counts-detection) sets the unique-read, LCA and EM evidence side by side. Nothing
+  is rounded or cut. `--neg-lb` (also flag features with a negative lower bound in a group) is a sensitivity
+  analysis.
 - **Samples removed by ANCOM-BC2's filters** (`--lib-cut`, prevalence) are named in the header, and the group
   sizes and random-effect units are checked again on the samples that remain.
 - **Host decoy and RNA-seq.** Reads that span introns do not align to the host genome with Bowtie 2, so
@@ -1042,12 +1063,24 @@ and each side (taxa, panel) has its own random stream. `da --imputations` fits A
 combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
 complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
 ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
-comes from the assignment. A feature that is not estimable in every fit (filtered, structural zero, failed fit, or
+comes from the assignment. The Barnard-Rubin degrees of freedom stay below the complete-data ones even when every
+imputation gives the same estimate (nu_com (nu_com + 1) / (nu_com + 3), e.g. 8.46 for 10; the formula of mice), so
+the pooled test is somewhat more conservative than a single ANCOM-BC2 fit; in a simulation with six samples per group
+and little assignment uncertainty this lowered the power from 12 % (LCA) to 5 % at an unchanged false-discovery rate
+(`docs/reports/simulation_em_mi_20261119/`). A feature that is not estimable in every fit (filtered, structural zero,
+failed fit, or
 a test ANCOM-BC2 could not run, which it reports as p = 1 with a nonzero W because the degrees of freedom are
 NA) gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
 The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
 every fit is not tested, exactly as in a single ANCOM-BC2 run.
 `diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.
+With `--struc-zero`, every fit's `structural_zeros.tsv` is kept as `imputations/structural_zeros_NNN.tsv` and
+`mi_structural_zeros.tsv` summarises them per feature: `n_fits` (fits that assessed the feature), `n_fits_absent`
+(fits in which it is absent from every sample of a group), `frac_fits_absent`, `absent_in_groups` (`B` when all
+absent fits agree, else each group set with its number of fits, e.g. `B (3); A (1)`), `absent_in_every_fit`,
+`inconsistent` (absent in some fits and not in others) and `n_fits_flagged_by_ancombc2`. This is a descriptive
+stability metric: structural-zero indicators are never pooled or merged into a P value, and a feature flagged in
+any fit keeps p = 1 and no combined estimate in `mi_results.tsv`.
 
 ```bash
 # taxa: Centrifuger -k 5 output, EM shares, 10 imputations
@@ -1066,6 +1099,51 @@ panel ledger policy) has no assignment uncertainty and contributes its one table
 counted with EM but without imputations is refused by the merge. `--p-adjust` with `--imputations` accepts holm,
 BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
 below 0.3); use 20 or more when it is larger.
+
+### Zeros with EM counts: `detection`
+
+A feature that has no read of its own in a group can still receive part of a shared read there under EM (for
+example one read that fits it and one other taxon equally well gives each 0.5). ANCOM-BC2 then sees a nonzero count,
+does not call a structural zero, and can report a finite fold change for a group in which the feature has no
+direct evidence. The EM values are kept as they are; `detection` shows what the zero pattern rests on:
+
+```bash
+unclassified-meta detection --em taxa_S_em --lca taxa_S_lca --metadata meta.tsv --group condition -o det_S
+# only some features (repeatable; feature ID or label):
+unclassified-meta detection --em taxa_S_em --metadata meta.tsv --group condition \
+    --feature "Sclerotinia nivalis" -o det_sn
+```
+
+`--em` is a `taxa-table --per-read --assign em` folder (its `counts.tsv`, `unique_counts.tsv` and imputation
+tables are verified against its manifest before they are read); `--lca` (optional) is a `taxa-table --assign lca`
+folder made with the same rank and taxonomy name. Rows are matched by `feature_id`, samples by the metadata column
+`sample`. Every source uses ANCOM-BC2's rule, count != 0 is present, and no threshold is applied:
+
+- `detection_by_sample.tsv`: `feature_id`, `label`, `sample`, `level` (the value of `--group`), `lca_count`,
+  `unique_count`, `em_expected`, `imputation_mean`, `imputation_nonzero_frac` (share of imputations with a count
+  above 0).
+- `detection_by_group.tsv`: per feature and level, `n_samples`; per source (`lca`, `unique`, `em_expected`)
+  `<source>_present_samples` and `<source>_reads`; `imputation_all_zero_frac` (share of imputations in which every
+  sample of the level is 0); `struc_zero_lca`, `struc_zero_unique`, `struc_zero_em_expected` (every sample of the
+  level is 0 under that source).
+- `detection_summary.tsv`: per feature, `struc_zero_levels_<source>`, `imputation_all_zero_frac (<group> = L)` per
+  level, `inconsistent` (a level is a structural zero in some imputations and not in others) and `interpretation`.
+
+LCA columns appear only with `--lca`, imputation columns only when the EM folder holds imputations. Each level gets
+the first matching class below (u = unique reads, e = EM expected count, l = LCA reads, summed over the level):
+
+| class | rule | text |
+|---|---|---|
+| zero | u = 0, e = 0 and l = 0 (or no `--lca`) | zero in every source in L |
+| shared only | u = 0, e != 0 | no unique-read support in L; EM expected count there comes only from shared reads |
+| LCA only | u = 0, e = 0, l != 0 | LCA reads but no unique or EM expected reads in L |
+| LCA zero | u != 0, l = 0 | LCA zero but unique reads present in L |
+| unique | u != 0 | unique-read support in L |
+
+When all levels fall in one class the text reads "... in every level" ("zero in every source" for the zero class);
+otherwise the statements are joined with ` | `. A "shared only" level is where an ANCOM-BC2 result on the expected
+table rests on the division of shared reads; the imputation columns and `mi_structural_zeros.tsv` show how often
+that level is empty when the shared reads are drawn whole.
 
 ### One organism, one feature: `panel-taxonomy`
 

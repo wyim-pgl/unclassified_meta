@@ -47,6 +47,7 @@ class Report:
     ledger: dict = field(default_factory=dict)
     dropped_found: set = field(default_factory=set)  # drop-list entries seen in this report
     em: dict = field(default_factory=dict)           # --assign em: equivalence classes and the fitted proportions
+    unique: dict = field(default_factory=dict)       # --assign em: taxid -> reads whose candidates are that taxon only
 
 
 # EM targets for reads that leave the table compete with the taxa for ambiguous reads. Each keeps its own taxID
@@ -265,8 +266,10 @@ def _check_ledger(ledger: pd.DataFrame, counts: pd.DataFrame) -> None:
 
 
 def _write_table(parsed: dict, sources: dict, outdir: Path, rank: str, namespace: str, evidence: str,
-                 imputed: list | None = None, record: dict | None = None) -> Path:
-    """`imputed`: M lists, one per imputation, of (counts {sample: {taxid: int}}, ledgers {sample: dict})."""
+                 imputed: list | None = None, record: dict | None = None, unique: bool = False) -> Path:
+    """`imputed`: M lists, one per imputation, of (counts {sample: {taxid: int}}, ledgers {sample: dict}).
+    `unique` (--assign em): also write unique_counts.tsv, the rows and samples of counts.tsv with each report's
+    `unique` reads (whole reads whose candidate set is that taxon alone)."""
     samples = list(parsed)
     imputed = imputed or []
     fractional = any(isinstance(v, float) and not float(v).is_integer()
@@ -291,13 +294,26 @@ def _write_table(parsed: dict, sources: dict, outdir: Path, rank: str, namespace
     if (outdir / "imputations").is_symlink():
         raise ValueError(f"{outdir / 'imputations'} is a link; the imputation tables must be written inside the "
                          "output folder itself")
-    refuse_overlap([outdir / n for n in ("counts.tsv", "features.tsv", "ledger.tsv", manifest.NAME, *imp_names)],
-                   list(sources.values()), "taxa-table")
+    extra_names = ["unique_counts.tsv"] if unique else []
+    refuse_overlap([outdir / n for n in ("counts.tsv", "features.tsv", "ledger.tsv", manifest.NAME, *extra_names,
+                                         *imp_names)], list(sources.values()), "taxa-table")
+    if unique:
+        extra = {t for s in samples for t, v in parsed[s].unique.items() if v} - set(taxids)
+        if extra:
+            raise AssertionError(f"unique reads of taxa without an expected count: {sorted(extra)[:3]}")
+        uc = pd.DataFrame({s: [int(parsed[s].unique.get(t, 0)) for t in taxids] for s in samples},
+                          index=[fid[t] for t in taxids])
+        uc.index.name = "feature_id"
+        if (uc.to_numpy(dtype=float) > counts.to_numpy(dtype=float) + 10 ** -DECIMALS * 10).any():
+            raise AssertionError("a unique-read count exceeds the expected count of its taxon")
     previous = manifest.previous_artifacts(outdir)
     manifest.begin(outdir, "taxa-table")
-    manifest.remove_stale(outdir, previous, imp_names)
+    manifest.remove_stale(outdir, previous, imp_names + extra_names)
     with staged(outdir / "counts.tsv") as tmp:
         counts.to_csv(tmp, sep="\t", float_format=f"%.{DECIMALS}f" if fractional else None)
+    if unique:
+        with staged(outdir / "unique_counts.tsv") as tmp:
+            uc.to_csv(tmp, sep="\t")
     feats = pd.DataFrame({
         "feature_id": [fid[t] for t in taxids], "label": [names[t] for t in taxids], "namespace": namespace,
         "accession": taxids, "identity_class": "taxon", "rank": rank, "evidence": evidence,
@@ -308,7 +324,7 @@ def _write_table(parsed: dict, sources: dict, outdir: Path, rank: str, namespace
     _check_ledger(ledger, counts)
     with staged(outdir / "ledger.tsv") as tmp:
         ledger.to_csv(tmp, sep="\t", index=False)
-    written = ["counts.tsv", "features.tsv", "ledger.tsv"]
+    written = ["counts.tsv", "features.tsv", "ledger.tsv", *extra_names]
     known = set(taxids)
     for m, (icounts, iledgers) in enumerate(imputed):
         extra = {t for s in samples for t in icounts[s]} - known
@@ -442,6 +458,9 @@ def build_table_from_per_read(per_read: dict[str, Path], outdir: str | Path, nod
     counts and ledger then hold expected reads with DECIMALS decimals, and `imputations` > 0 also writes that many
     integer count tables drawn from the posterior assignment probabilities (imputations/counts_NNN.tsv and
     ledger_NNN.tsv) for `da --imputations`. Reads with one candidate are counted the same way in both modes.
+    With 'em', unique_counts.tsv (same rows and samples, whole reads) holds the reads whose candidate set resolves
+    to that one taxon at the rank: the evidence that does not depend on how shared reads are divided. The LCA output
+    is unchanged.
     """
     if assign not in ASSIGN_MODES:
         raise ValueError(f"--assign must be one of {', '.join(ASSIGN_MODES)}")
@@ -548,6 +567,8 @@ def build_table_from_per_read(per_read: dict[str, Path], outdir: str | Path, nod
             raise ValueError(f"{path}: no reads found")
         if assign == "em":
             n_dropped_whole = n["dropped"]
+            # unique-read evidence: reads whose candidate set resolves to one taxon at the rank (singleton classes)
+            rep.unique = {k[0]: int(c) for k, c in classes.items() if len(k) == 1 and _outcome_of_token(k[0]) == "kept"}
             fit = em.expected_counts(classes)
             if not fit.converged:
                 raise ValueError(f"{sample}: the EM assignment did not converge in {fit.iterations} iterations; the "
@@ -628,7 +649,7 @@ def build_table_from_per_read(per_read: dict[str, Path], outdir: str | Path, nod
                         + (" (ambiguous reads shared by EM)" if assign == "em" else ""), imputed,
                         {"assignment": assign, **({"seed": int(seed)} if imputations else {}),
                          "nodes_sha256": nodes_sha, "names_sha256": names_sha,
-                         "dropped_lineages": sorted(wanted)})
+                         "dropped_lineages": sorted(wanted)}, unique=assign == "em")
 
 
 def panel_scope(panel_counts: str | Path) -> tuple[str, Path | None]:

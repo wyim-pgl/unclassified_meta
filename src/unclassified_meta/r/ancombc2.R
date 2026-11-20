@@ -240,6 +240,18 @@ if (isTRUE(opt$`struc-zero`)) {
     zi$absent_in_groups <- absent
     zi$absent_in_a_group <- absent != ""
     zi <- zi[, c("feature_id", "label", flag_cols, "flagged_by_ancombc2", "absent_in_groups", "absent_in_a_group")]
+    # the evidence behind the decision, per group level and on the same retained samples: presence is count != 0,
+    # the rule ANCOM-BC2 applies; reads keep their fractions (EM expected counts), nothing is rounded or cut
+    rows_f <- match(zi$feature_id, rownames(mat))
+    for (lv in levels(grp_k)) {
+      s_lv <- kept_samples[grp_k == lv]
+      sub <- mat[rows_f, s_lv, drop = FALSE]
+      tag <- paste0(" (", group, " = ", lv, ")")
+      zi[[paste0("samples", tag)]] <- length(s_lv)
+      zi[[paste0("present_samples", tag)]] <- rowSums(sub != 0)
+      zi[[paste0("reads", tag)]] <- rowSums(sub)
+      zi[[paste0("max_count", tag)]] <- apply(sub, 1, max)
+    }
     write.table(zi, sz_file, sep = "\t", quote = FALSE, row.names = FALSE)
     n_sz <- sum(zi$absent_in_a_group)
     by_grp <- table(unlist(strsplit(absent[absent != ""], ",")))
@@ -247,10 +259,14 @@ if (isTRUE(opt$`struc-zero`)) {
                       if (length(by_grp)) paste0(" (", paste(names(by_grp), by_grp, sep = ": ", collapse = ", "), ")") else "",
                       "; ", sum(zi$flagged_by_ancombc2), " flagged by ANCOM-BC2",
                       if (isTRUE(opt$`neg-lb`)) " (neg_lb on: also features with a negative lower bound)" else "",
-                      "; flagged features are not tested here, see structural_zeros.tsv")
+                      "; flagged features are not tested here, see structural_zeros.tsv; presence follows ",
+                      "ANCOM-BC2's rule (count != 0 in a sample), so with EM expected counts a fraction of a shared ",
+                      "read counts as present (structural_zeros.tsv gives present samples, reads and the largest ",
+                      "count per group; `unclassified-meta detection` sets unique-read, LCA and EM evidence side by ",
+                      "side); --neg-lb is a sensitivity analysis")
   } else {
     write.table(data.frame(feature_id = character(0)), sz_file, sep = "\t", quote = FALSE, row.names = FALSE)
-    sz_note <- "# structural zeros: none"
+    sz_note <- "# structural zeros: none (presence follows ANCOM-BC2's rule, count != 0 in a sample)"
   }
 }
 header <- append(header, sz_note, after = length(header) - 1)

@@ -34,6 +34,22 @@
   - LCA 유의 항목의 MI 값: Ampelomyces q 0.059(fmi 0.08, robust_frac 1.0), Carlavirus q 0.25, Parastagonospora q 1(fmi 0.66, df 2.7), Neocucurbitaria q 1(fmi 0.79). 배정에 따라 결과가 바뀌는 속은 MI에서 유의하지 않다.
 - potexvirus-like 4개 점검(`RNA/potex_check/`): 특징 간 동일성 92–98 %, Spearman 0.88–0.99 → 같은 종.
 
+## DNA 비교 (2026-11-19 14:30 PST; stage A 6272798 완료 2:13:30, DA LCA S·G와 EM G 완료, EM S 6272799 실행 중)
+- 종(S): LCA 12,612 / q<0.05 61 / robust 26; EM 기대값 14,054 / 54 / 32; LFC Pearson 0.901(양쪽 추정 9,781); robust 공통 24.
+- 속(G): LCA 3,255 / 71 / 24; EM 기대값 3,243 / 105 / 27; LFC Pearson 0.983; robust 공통 22.
+- 속(G) MI 재결합(고친 코드, `OSD18/DNA/repool_fix/mi_results_G.tsv`): q<0.05 40(수정 전 75), 40개 모두 LCA에서도 q<0.05; robust 25(LCA와 공통 21, MI만 4, LCA만 3). fmi 중앙값 0.029, 90분위 0.25 — RNA(0.21)보다 배정 불확실성이 작다.
+
+## 종 수준 MI 재결합 (2026-11-20 02:40 PST; RNA EM DA 6272794 7:43:16, DNA EM DA 6272799 9:07:48 완료, 고친 코드로 `OSD18/<T>/repool_fix/mi_results_S.tsv`)
+- RNA 종: 수정 전 MI q<0.05 242 → **2**(Tobamovirus muricaudae LFC −7.99, cyanobacterium TDX16 LFC 2.68; 둘 다 robust, 둘 다 LCA에서도 유의). LCA 7/robust 5, EM 기대값 10/4. fmi 중앙값 0.34, 90분위 0.82.
+- DNA 종: 수정 전 197 → **33**(LCA와 공통 32, MI만 1); robust 17(전부 LCA robust와 공통, LCA만 9). LCA 61/26, EM 기대값 54/32. fmi 중앙값 0.15, 90분위 0.61.
+- MI는 LCA보다 적게 부르고, MI가 부른 것은 거의 모두 LCA도 부른다. EM 기대값 fit에만 있는 유의 항목은 MI에서 남지 않는다.
+
+## 구조적 0 진단 (RNA; 보고서 `docs/reports/osd18_structural_zero/REPORT.md`)
+- ANCOMBC 2.14.0 `.get_struc_zero`(group condition)를 저장된 표에 직접 적용(재적합 없음), per-read 파일로 고유·공유 리드 계산(Slurm 6279815).
+- 종 수준 LCA count = 고유 리드 수. Tobamovirus cacti(macho)·Citrus yellow vein-associated virus(healthy)는 그 조건의 고유 리드 0, 공유 리드 4·10개의 분수 배정이 EM 기대값의 0을 없앰; imputation 중 구조적 0 7/10·3/10.
+- 두 경우 모두 구조적 0을 부재로 읽을 근거가 없다: T. cacti macho 기대 리드 0.35(검출 한계 안), CYVaV는 같은 umbra-like 무리가 P257 healthy에 있음(식물별 감염).
+- 전체(종, `--panel-taxonomy`로 재병합한 LCA `taxa_S_lca_ptx` 기준): LCA 구조적 0이지만 EM 기대값은 아닌 특징 2,383개(속 193), 반대 방향 0개, imputation 간 판정이 갈리는 특징 6,186개(속 617). 재병합 전 LCA와 차이는 3개뿐.
+
 ## 시뮬레이션
 - 폴더 `/home/wyim/.claude/jobs/d4415b8c/tmp/sim/`(잡 임시폴더 — 끝나면 영구 위치로 복사). REPORT.md는 alt 5·null 3 데이터셋 기준. 연장 실행(alt 12·null 8 목표, 4시간 예산) 진행 중.
 - 결과(alt 5·null 3): 세 방법 편향 유사(changed LFC 편향 LCA 0.091, EM 0.081, MI 0.083), 변화 없는 종 coverage LCA 97.1 %, EM 96.5 %, MI 99.4 %, 검정력 LCA 10 %, EM 6.7 %, MI 0 %(그룹당 6 샘플), global-null FDR 모두 0. 시뮬레이션 FMI 중앙값 0.001로 실데이터(0.24)보다 훨씬 작음 → 시뮬레이션의 모호성 구조가 실데이터를 대표하지 못함.

@@ -1,5 +1,5 @@
 """Command-line interface: run, extract, detect, download-refs, config, panel-build, panel-quant, taxa-table,
-control-reads, control-summary, da, seal-refs.
+control-reads, control-summary, da, detection, seal-refs.
 
 Every command that writes runs `_guard` before its first write (log file and sample sheet included): it refuses
 an output folder that holds, or lies inside, an input, and takes an exclusive lock on the output folder so a
@@ -21,7 +21,7 @@ from .runner import StepError, setup_logging
 # arguments that never name an input file
 _NOT_INPUTS = {"cmd", "outdir", "group", "formula", "reference_level", "rand_formula", "p_adjust", "categories",
                "suffix", "rank", "namespace", "drop_lineage", "panel_lineage", "report_format", "preset",
-               "reads_scope", "prefix", "classifier", "n_reads", "mode", "subsample", "only"}
+               "reads_scope", "prefix", "classifier", "n_reads", "mode", "subsample", "only", "feature"}
 
 
 def _samples(args):
@@ -298,6 +298,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="use count tables that were not made by panel-quant / taxa-table (no manifest); they are "
                          "used as they are, without the completeness and checksum checks")
 
+    dt = sub.add_parser("detection", help="read evidence per feature and group (unique reads, LCA, EM expected counts, "
+                                          "imputations) behind presence and structural zeros")
+    dt.add_argument("--em", required=True, metavar="DIR", help="folder of taxa-table --per-read --assign em (its "
+                                                              "counts.tsv, unique_counts.tsv and imputations)")
+    dt.add_argument("--lca", metavar="DIR", help="folder of taxa-table --assign lca for the same reads (optional)")
+    dt.add_argument("--metadata", required=True, help="TSV with a 'sample' column and the group column")
+    dt.add_argument("--group", required=True, help="metadata column that holds the groups")
+    dt.add_argument("--feature", action="append", default=[],
+                    help="feature ID or label to report (repeatable; default: every feature)")
+    dt.add_argument("-o", "--outdir", default="detection")
+
     ptx = sub.add_parser("panel-taxonomy", help="taxID of each panel feature from the classifier's own taxonomy "
                                                "(for taxa-table --merge-panel --panel-taxonomy)")
     ptx.add_argument("--panel", required=True, help="folder made by panel-build")
@@ -490,6 +501,13 @@ def _dispatch(args, stack) -> int:
             ins = [x for x in ins if str(x) != str(args.rscript)] if args.rscript else ins
             _guard(stack, "da", args.outdir, ins)
             da.run_ancombc2(args, ins)
+        elif args.cmd == "detection":
+            from . import detection
+            outdir = _guard(stack, "detection", args.outdir, _inputs(args))
+            setup_logging(outdir / "detection.log")
+            out = detection.run(args.em, args.metadata, args.group, outdir, args.lca, args.feature)
+            print(f"detection: {out} (per group: {outdir / 'detection_by_group.tsv'}, per sample: "
+                  f"{outdir / 'detection_by_sample.tsv'})")
         elif args.cmd == "panel-taxonomy":
             from . import panel_taxonomy as ptx
             if bool(args.write_fasta) == bool(args.classified):

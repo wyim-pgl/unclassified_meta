@@ -72,11 +72,13 @@ def previous_artifacts(folder: str | Path, name: str = NAME) -> dict:
         return {}
 
 
-STALE_NAME = re.compile(r"(imputations/(counts|ledger|ancombc2_results)_\d{3,}\.tsv|collapsed\.tsv|mi_results\.tsv)")
+STALE_NAME = re.compile(r"(imputations/(counts|ledger|ancombc2_results|structural_zeros)_\d{3,}\.tsv|collapsed\.tsv"
+                        r"|mi_results\.tsv|mi_structural_zeros\.tsv|unique_counts\.tsv)")
 
 
 def remove_stale(folder: str | Path, previous: dict, keep) -> None:
-    """Delete outputs the previous generation sealed (imputation tables, collapsed.tsv) that this one does not write
+    """Delete outputs the previous generation sealed (imputation tables, collapsed.tsv, unique_counts.tsv,
+    mi_results.tsv, mi_structural_zeros.tsv) that this one does not write
     again: only names this program writes, only regular files inside the folder (never through a link), and only
     when the file is still exactly the sealed one (a file replaced since is somebody else's and stays)."""
     folder = Path(folder)
