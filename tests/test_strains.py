@@ -439,5 +439,6 @@ def test_panel_build_splits_the_reference_bin_by_the_strain_clusters(e2e, tmp_pa
     assert len(kids) == 4 and all(i.split("|")[-1].startswith("c98_") for i in kids.index)
     ref_rows = f[(f.accession == "REF1") & (f.identity_class == "reference")]
     assert len(ref_rows) == 1 and ref_rows.iloc[0].parent_feature.endswith("|REF1|same")
+    assert ref_rows.iloc[0].evidence == "reference genome of a bin split into operational clusters"
     prov = json.loads((out / "provenance.json").read_text())
     assert prov["inputs"]["strain_clusters"]["sha256"] == manifest.sha256(d / "out" / "viral_strain_clusters.tsv")

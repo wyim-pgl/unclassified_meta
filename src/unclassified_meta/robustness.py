@@ -26,8 +26,9 @@ Statistics and limits
 * Dimensions stay separate: assignment_confidence (em-uncertainty), abundance_stability (bootstrap CV),
   da_support, cross_method_agreement, replicate_consistency and resolution_stability are separate columns; the
   only combination is the printed rule behind `conclusion`.
-* Power. With few samples per group a non-significant result is not evidence of no effect; mde_80 = (1.96 +
-  0.8416) x SE is the effect a two-sided 5 % test detects with 80 % power, on each method's own scale.
+* Power. With few samples per group a non-significant result is not evidence of no effect; mde_80 = (z(1 -
+  alpha/2) + z(0.8)) x SE is the effect a single unadjusted two-sided test detects with 80 % power, on each
+  method's own scale (optimistic: the multiple-testing adjustment raises the bar).
 """
 from __future__ import annotations
 
@@ -56,7 +57,12 @@ METHOD_NAMES = {"ancombc2": "ANCOM-BC2", "aldex2": "ALDEx2", "linda": "LinDA"}
 SCALE = {"ancombc2": "ln", "aldex2": "log2 CLR", "linda": "log2 CLR"}
 ANCOMBC2_DEFINITION = "ANCOM-BC2 bias-corrected log fold change (natural log)"
 STANDARD_COLUMNS = ("feature_id", "term", "effect", "se", "ci_low", "ci_high", "stat", "p", "q", "effect_definition")
-Z_MDE80 = 1.96 + 0.8416                   # two-sided alpha 0.05, power 0.80
+from statistics import NormalDist
+
+
+def z_mde80(alpha: float) -> float:
+    """z(1 - alpha/2) + z(0.80): an unadjusted two-sided level-alpha test with 80 % power."""
+    return NormalDist().inv_cdf(1 - alpha / 2) + NormalDist().inv_cdf(0.80)
 DIRECTION_MIN, SIGNIFICANCE_MIN, LOO_DIRECTION_MIN = 0.9, 0.8, 0.9
 CV_STABLE, CV_MODERATE = 0.2, 0.5
 CONCORDANCE_CLASSES = ("all_significant_same_direction", "majority_significant_same_direction", "single_method",
@@ -137,18 +143,31 @@ def read_standard(path) -> pd.DataFrame:
     return df[list(STANDARD_COLUMNS)]
 
 
+def is_group_term(term: str, group: str, levels) -> bool:
+    """A model-matrix column of the group variable, or an interaction with it in any position: some ':'-separated
+    part equals the group name (numeric group) or group + level (factor). A name prefix is not enough: with group
+    'g', a covariate 'gender' gives the column 'genderM'."""
+    names = {group} | {f"{group}{lv}" for lv in levels}
+    return any(part in names for part in str(term).split(":"))
+
+
 def ancombc2_to_standard(res: pd.DataFrame) -> pd.DataFrame:
     """ANCOM-BC2's wide table (lfc_/se_/W_/p_/q_<term>) as the standard long table; the intercept is left out.
-    stat = W (lfc / se); ci = lfc +- 1.96 se (ANCOM-BC2's own test uses the same normal reference)."""
+    stat = W (lfc / se). ANCOM-BC2 tests W with a t reference whose df it does not report, so ci = lfc +- 1.96 se
+    is a normal approximation (narrower than the t interval for small df; the p value is the reference).
+    A fit ANCOM-BC2 could not test (p = 1 filled in for NA df, da._untestable) has no effect: effect, se, p and q
+    are NaN, so it counts as not tested, never as a direction."""
     terms = [c[4:] for c in res.columns if c.startswith("lfc_") and c != "lfc_(Intercept)"]
     parts = []
     num = lambda c: pd.to_numeric(res[c], errors="coerce") if c in res.columns else pd.Series(np.nan, index=res.index)
     for t in terms:
-        eff, se = num(f"lfc_{t}"), num(f"se_{t}")
+        eff, se, w, p, q = num(f"lfc_{t}"), num(f"se_{t}"), num(f"W_{t}"), num(f"p_{t}"), num(f"q_{t}")
+        bad = np.isfinite(p.to_numpy()) & da._untestable(p.to_numpy(), w.to_numpy(), eff.to_numpy(), se.to_numpy())
+        eff, se, p, q = (s.mask(bad) for s in (eff, se, p, q))
         parts.append(pd.DataFrame({"feature_id": res["feature_id"].astype(str), "term": t, "effect": eff, "se": se,
                                    "ci_low": eff - 1.959964 * se, "ci_high": eff + 1.959964 * se,
-                                   "stat": num(f"W_{t}"), "p": num(f"p_{t}"), "q": num(f"q_{t}"),
-                                   "effect_definition": ANCOMBC2_DEFINITION}))
+                                   "stat": w, "p": p, "q": q,
+                                   "effect_definition": ANCOMBC2_DEFINITION + "; 95 % interval normal approximation"}))
     if not parts:
         return pd.DataFrame(columns=list(STANDARD_COLUMNS))
     return pd.concat(parts, ignore_index=True)[list(STANDARD_COLUMNS)]
@@ -502,7 +521,7 @@ def replicate_rows(method: str, primary: pd.DataFrame, loo: list, alpha: float, 
         summ["loo_significance_stability"] = np.nan
         summ["single_sample_driven"] = False
         summ["drivers"] = ""
-    summ["mde_80"] = (Z_MDE80 * p["se"]).to_numpy()
+    summ["mde_80"] = (z_mde80(alpha) * p["se"]).to_numpy()
     out = pd.concat([*long, summ], ignore_index=True)
     out.insert(2, "label", out["feature_id"].map(lambda f: labels.get(f, f)))
     return out
@@ -769,7 +788,8 @@ def _analyse(args, inp: Inputs, cp: dict, methods: list, cuts: list, rscript: st
         done = list(ex.map(lambda j: run_job(j, rscript, features_path, args, stage, outdir), jobs))
     status = pd.DataFrame([s for s, _ in done])
     results = {(j.method, j.analysis.name): r for j, (s, r) in zip(jobs, done) if r is not None}
-    terms_of = lambda r: r[r["term"].astype(str).str.startswith(args.group)]     # group terms (and interactions)
+    levels = [str(x) for x in meta[args.group].dropna().unique()]
+    terms_of = lambda r: r[r["term"].astype(str).map(lambda t: is_group_term(t, args.group, levels))]
     results = {k: terms_of(v) for k, v in results.items()}
     by_kind = {}
     for a in analyses:
@@ -910,8 +930,9 @@ def _analyse(args, inp: Inputs, cp: dict, methods: list, cuts: list, rscript: st
         "direction / significance stability over the successful fits, single_sample_driven = significant at the "
         "primary analysis but not after leaving out some single sample/unit (listed in drivers)",
         "max_single_sample_share = largest share of one group's normalized abundance contributed by one sample; "
-        "mde_80 = (1.96 + 0.8416) x primary SE: the effect detectable with 80 % power (two-sided alpha 0.05), "
-        "on the method's own scale"])
+        f"mde_80 = (z(1 - alpha/2) + z(0.80)) x primary SE = {z_mde80(alpha):.3f} x SE: the effect a single "
+        f"two-sided test at UNADJUSTED alpha {alpha} detects with 80 % power, on the method's own scale; after "
+        f"multiple-testing adjustment ({args.p_adjust}) a larger effect is needed"])
     write_tsv(stage / "robustness_summary.tsv", summary, [
         "one row per feature x term; the dimensions are separate columns", CONCLUSION_RULE,
         f"replicate_consistency: no method single_sample_driven and leave-one-out direction stability >= "
@@ -1122,7 +1143,7 @@ def render_report(args, methods, sizes, selected, primary, analyses, status, sta
                                        if any(a.kind == k for a in analyses)),
             f"- fits: {len(ok)} of {len(status)} succeeded", ""]
     if low:
-        mde = st["primary_se"].groupby(level=0).median() * Z_MDE80
+        mde = st["primary_se"].groupby(level=0).median() * z_mde80(alpha)
         out += ["## Low replication", "",
                 f"At least one group has 4 or fewer samples ({', '.join(f'{g} = {n}' for g, n in low.items())}). "
                 "With so few biological replicates the tests have little power: only large effects can reach "
@@ -1130,7 +1151,8 @@ def render_report(args, methods, sizes, selected, primary, analyses, status, sta
                 "(see replicate_sensitivity.tsv).",
                 "",
                 "- A non-significant result is not evidence of no effect.",
-                "- Minimal detectable effect at 80 % power (median over features, (1.96 + 0.8416) x SE, each "
+                f"- Minimal detectable effect at 80 % power (median over features, {z_mde80(alpha):.3f} x SE for an "
+                f"unadjusted two-sided alpha {alpha}; after {args.p_adjust} adjustment a larger effect is needed; each "
                 "method's own scale): " + ", ".join(f"{m} {_fmt(v)} ({SCALE[m]})" for m, v in mde.items()),
                 "- Bootstrap tables and posterior realizations are resamples of the same samples, not "
                 "replicates; they cannot add power.", ""]

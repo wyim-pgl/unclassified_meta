@@ -59,6 +59,16 @@ DA_OUTPUT_PATTERNS = ("ancombc2_results.tsv", "structural_zeros.tsv", "session_i
                       "*.pdf")             # mi_results.tsv is removed only as a sealed output (manifest.remove_stale)
 
 
+P_ADJUST_METHODS = ("holm", "bh", "fdr", "by", "bonferroni", "none")      # what p_adjust implements (lower case)
+
+
+def check_p_adjust(method: str) -> None:
+    """Refuse, before any fit runs, a --p-adjust that the Python pooling (p_adjust) cannot apply."""
+    if str(method).lower() not in P_ADJUST_METHODS:
+        raise StepError(f"--p-adjust {method} is not available with --imputations (use holm, BH, BY, bonferroni, "
+                        "none)")
+
+
 def p_adjust(p, method: str):
     """R's p.adjust for holm, BH/fdr, BY, bonferroni and none (NaN entries are left out)."""
     import numpy as np
@@ -268,6 +278,8 @@ def run_ancombc2(args, inputs=()) -> Path:
     files checked against the inputs and moved into place, and the output folder is sealed with a manifest."""
     from . import manifest
     from .io_utils import make_staging_dir, refuse_overlap, remove_staging_dir
+    if getattr(args, "imputations", False):
+        check_p_adjust(args.p_adjust)            # before the previous result is unpublished and any fit runs
     expected = verify_inputs(args.counts, args.features, getattr(args, "unsealed_input", False))
     rscript = find_rscript(args.rscript)
     if not has_ancombc(rscript):

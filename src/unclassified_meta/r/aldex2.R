@@ -119,7 +119,10 @@ pick <- function(term, new, old) {
 }
 terms <- setdiff(colnames(mm), "(Intercept)")
 alpha <- as.numeric(opt$alpha)
-def <- "ALDEx2 aldex.glm coefficient on the CLR scale (log2; mean over Monte-Carlo Dirichlet instances)"
+# aldex.glm's per-instance tests are lm t tests with the residual df of the model matrix: the interval uses the
+# same t reference, so it agrees with p (a normal quantile would be too narrow with few samples)
+tq <- qt(0.975, max(1, nrow(mm) - qr(mm)$rank))
+def <-"ALDEx2 aldex.glm coefficient on the CLR scale (log2; mean over Monte-Carlo Dirichlet instances)"
 rows <- list()
 for (t in terms) {
   est <- pick(t, "Est", "Estimate"); se <- pick(t, "SE", "Std. Error")
@@ -131,7 +134,7 @@ for (t in terms) {
   if (is.null(se)) se <- rep(NA_real_, length(est))
   if (is.null(st)) st <- rep(NA_real_, length(est))
   rows[[t]] <- data.frame(feature_id = rownames(glm_res), term = t, effect = est, se = se,
-                          ci_low = est - qnorm(0.975) * se, ci_high = est + qnorm(0.975) * se,
+                          ci_low = est - tq * se, ci_high = est + tq * se,
                           stat = st, p = p, q = p.adjust(p, method = opt$`p-adjust`), effect_definition = def,
                           check.names = FALSE, stringsAsFactors = FALSE)
 }

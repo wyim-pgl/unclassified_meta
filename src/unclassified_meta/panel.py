@@ -475,7 +475,9 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
                     ref_feature[(src_key, acc)] = fid
                     ref_rows.append({"feature_id": fid, "label": f"{clean_title(r.best_hit_title, acc)} (reference genome)",
                                      "namespace": r.namespace, "accession": acc, "identity_class": "reference",
-                                     "n_sequences": 0, "total_length": 0, "evidence": "reference genome of a 'like' bin",
+                                     "n_sequences": 0, "total_length": 0,
+                                     "evidence": ("reference genome of a bin split into operational clusters"
+                                                  if parent else "reference genome of a 'like' bin"),
                                      "n_contigs": 0, "weighted_identity": "", "identity_min": "", "identity_max": "",
                                      "mixed_identity": False, "reference_included": True,
                                      "best_hit_title": r.best_hit_title, "parent_feature": parent})

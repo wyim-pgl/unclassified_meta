@@ -105,6 +105,10 @@ lin_args <- list(feature.dat = mat, meta.dat = meta, formula = fml, feature.dat.
                  alpha = as.numeric(opt$alpha), p.adj.method = opt$`p-adjust`, n.cores = as.integer(opt$threads),
                  verbose = FALSE)
 lin_args <- lin_args[names(lin_args) %in% names(formals(MicrobiomeStat::linda))]
+# a linda() without p.adj.method would silently use its own adjustment: then q is computed here from its p values
+own_adjust <- !"p.adj.method" %in% names(lin_args)
+if (own_adjust) note("this MicrobiomeStat linda() has no p.adj.method; q = p.adjust(pvalue, '", opt$`p-adjust`,
+                     "') computed by linda.R")
 set.seed(as.integer(opt$seed))
 fit <- withCallingHandlers(suppressMessages(do.call(MicrobiomeStat::linda, lin_args)),
                            warning = function(w) { warn <<- c(warn, one_line(paste0("LinDA: ", conditionMessage(w))))
@@ -119,7 +123,9 @@ for (t in names(fit$output)) {
   tq <- qt(0.975, df_t)
   rows[[t]] <- data.frame(feature_id = rownames(d), term = t, effect = d$log2FoldChange, se = d$lfcSE,
                           ci_low = d$log2FoldChange - tq * d$lfcSE, ci_high = d$log2FoldChange + tq * d$lfcSE,
-                          stat = d$stat, p = d$pvalue, q = d$padj, effect_definition = def,
+                          stat = d$stat, p = d$pvalue,
+                          q = if (own_adjust) p.adjust(d$pvalue, method = opt$`p-adjust`) else d$padj,
+                          effect_definition = def,
                           check.names = FALSE, stringsAsFactors = FALSE)
 }
 missing_terms <- setdiff(mm_terms, names(rows))

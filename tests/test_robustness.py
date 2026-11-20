@@ -216,7 +216,7 @@ def test_single_sample_driven_names_the_sample_that_carries_the_call():
     assert s.loc["a", "loo_significance_stability"] == pytest.approx(2 / 3)
     assert s.loc["a", "loo_direction_stability"] == 1.0
     assert not bool(s.loc["b", "single_sample_driven"]) and s.loc["b", "drivers"] == ""
-    assert s.loc["a", "mde_80"] == pytest.approx((1.96 + 0.8416) * 0.5)
+    assert s.loc["a", "mde_80"] == pytest.approx((1.959964 + 0.841621) * 0.5, rel=1e-5)
     assert len(out[out["left_out"] != "SUMMARY"]) == 6
 
 
@@ -457,5 +457,47 @@ def test_three_r_methods_on_synthetic_data(tmp_path):
     up = stab[stab["feature_id"] == UP].set_index("method")
     assert (up["boot_direction_stability"] == 1).all() and (up["real_direction_stability"] == 1).all()
     assert "rounded" in (out / "fits/aldex2__primary/warnings.txt").read_text()
+    # ALDEx2's interval uses the t reference of its lm tests (12 samples, 2 model columns: df 10), not the normal one
+    ald = read(out / "fits/aldex2__primary/results.tsv").dropna(subset=["se"])
+    half = ((ald["ci_high"] - ald["effect"]) / ald["se"]).to_numpy()
+    assert np.allclose(half, 2.228139, atol=1e-4), half[:3]
     versions = manifest.verify(out)["versions"]
     assert "ALDEx2 1.42.0" in versions["R (aldex2)"] and "MicrobiomeStat 1.4" in versions["R (linda)"]
+
+
+# ---------------------------------------------------------------- regressions from the code review of `integrate`
+
+def test_group_terms_are_matched_by_model_matrix_column_not_by_name_prefix():
+    levels = ["A", "B"]
+    assert rb.is_group_term("gB", "g", levels)
+    assert rb.is_group_term("batch2:gB", "g", levels)            # interaction with the group written second
+    assert not rb.is_group_term("genderM", "g", levels)          # covariate whose name starts with the group name
+    assert rb.is_group_term("dose", "dose", [])                  # numeric group: the column is its own name
+
+
+def test_an_ancombc2_fit_that_could_not_test_a_feature_counts_as_not_tested():
+    res = pd.DataFrame({"feature_id": ["untested", "zero_w", "ok"], "lfc_gB": [3.0, 0.0, 1.0],
+                        "se_gB": [0.1, 0.5, 0.4], "W_gB": [30.0, 0.0, 2.5], "p_gB": [1.0, 1.0, 0.01],
+                        "q_gB": [1.0, 1.0, 0.02]})
+    out = rb.ancombc2_to_standard(res).set_index("feature_id")
+    assert np.isnan(out.loc["untested", "effect"]) and np.isnan(out.loc["untested", "p"])
+    assert out.loc["zero_w", "effect"] == 0.0 and out.loc["zero_w", "p"] == 1.0      # W = 0: a real p = 1
+    assert out.loc["ok", "effect"] == 1.0 and "normal approximation" in out.loc["ok", "effect_definition"]
+
+
+def test_mde_follows_alpha():
+    assert rb.z_mde80(0.05) == pytest.approx(2.801585, rel=1e-6)
+    assert rb.z_mde80(0.01) == pytest.approx(2.575829 + 0.841621, rel=1e-6)
+
+
+def test_da_imputations_refuses_an_unsupported_p_adjust_before_unpublishing_anything(tmp_path, monkeypatch):
+    def must_not_run(*a, **k):
+        raise AssertionError("inputs were read before the --p-adjust check")
+    monkeypatch.setattr(da, "verify_inputs", must_not_run)
+    from unclassified_meta.cli import build_parser
+    args = build_parser().parse_args(["da", "--counts", "c.tsv", "--features", "f.tsv", "--metadata", "m.tsv",
+                                      "--group", "g", "--imputations", "--p-adjust", "hochberg",
+                                      "-o", str(tmp_path / "da")])
+    with pytest.raises(da.StepError, match="not available"):
+        da.run_ancombc2(args)
+    assert not (tmp_path / "da").exists()
