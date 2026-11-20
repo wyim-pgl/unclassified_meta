@@ -222,7 +222,9 @@ def test_a_converged_fit_is_certified_close_to_the_maximum(classes):
     f = em.expected_counts(classes)
     c = em._Classes(classes)
     theta = np.array([f.theta[t] for t in c.targets])
-    assert f.converged and em._gap(c, theta) <= em.GAP_TOL
+    s = c.sums(theta)
+    bound = min(em._gap(c, theta, s), em._dual_gap(c, theta, s, em._grad(c, theta, s), em.DUAL_TOL))
+    assert f.converged and bound <= em.DUAL_TOL
 
 
 def test_crossing_imputations_follow_the_information_of_a_single_crossing_read():

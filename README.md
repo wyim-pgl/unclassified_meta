@@ -592,6 +592,12 @@ classifier's reads. Measured on a synthetic Centrifuger file of 15 million reads
 it for `extract` peaked at 2.7 GB (71 s), `taxa-table --per-read` at 2.0 GB (56 s), i.e. about 130-180 bytes per
 read. Plan roughly 2 GB per 10 million reads.
 
+**`taxa-table --assign em --imputations 10`** (one core, Pronghorn Xeon E5-2683 v4, 2026-11-19): 18 RNA samples
+(74.9 M reads, rank S, with `--merge-panel` and `--panel-taxonomy`) take 27 min and 2.6 GB; before the
+2026-11-19 EM changes the same command took 2 h 44 min. `--assign lca` takes about 5 min; the rest is the EM and
+the imputations. Profile, per-sample numbers, validation and the commands to repeat the benchmark:
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md).
+
 The assembler is the step that needs the most memory. Before assembling, the pipeline estimates the peak
 memory from the number of pooled reads and prints a **WARNING** when the estimate exceeds `--memory` or
 the free memory of the machine, with the subsample size that would fit.
@@ -1027,8 +1033,14 @@ structural-zero check. Use that fit as a quick look; the combined test below is 
 How the expected counts are computed: candidates that share reads form independent groups. A group whose read
 classes are laminar (any two classes disjoint or nested; on real Centrifuger output most groups) has a closed-form
 maximum-likelihood solution, the Dirichlet tree. Any other group is fitted by EM accelerated with SQUAREM until its
-log-likelihood is certified to be within 0.5 of its maximum (tangent-plane bound of the concave likelihood); where
-the likelihood is that flat, the data do not pin the counts down any closer, and the imputations show it.
+log-likelihood is certified to be within 1e-4 of its maximum. The certificate is the Lagrangian dual of the
+mixture likelihood: for any positive class weights it bounds the maximum from above, so the bound is rigorous. With
+the weights at the current fit it is the tangent-plane bound, and lowering the weights of the few classes that hold
+a tiny-share candidate makes it much tighter. Before 2026-11-19 the EM stopped when the tangent-plane bound reached
+0.5. That bound can stay open for 10^5 iterations after the likelihood has stopped changing: EM grows a small share
+only by the factor gradient / N per iteration, and N is every read of the group. The current fits are therefore
+both faster and closer to the maximum (on OSD18 the log-likelihood of every sample is higher, by 0.2-1.9 nats). The
+estimator itself, the maximum-likelihood share, is unchanged.
 
 `--imputations M` writes M integer tables drawn from the posterior of the assignment (Jeffreys Dirichlet prior,
 0.5 per candidate), so the tables carry both the uncertainty of which candidate a read came from and of the
@@ -1038,7 +1050,11 @@ B the Beta(0.5, 1.5) posterior share). Groups with crossing classes use a data-a
 started by sampling-importance-resampling from the exact posterior of their largest-read laminar part, weighted
 by the likelihood of the crossing classes; when those crossing classes hold very many reads the start, and with
 it the draws, are approximate. `fmi` and the per-imputation results show how much the assignment matters. Each sample
-and each side (taxa, panel) has its own random stream. `da --imputations` fits ANCOM-BC2 on every table and
+and each side (taxa, panel) has its own random stream. The same `--seed` gives the same tables on every run. The
+chains of all groups and all M imputations run side by side as arrays, and the reads of a class are drawn together
+as one multinomial (read by read for classes of up to 16 reads). The draws follow the same distributions as before
+2026-11-19 but use the random numbers in a different order, so a seed gives different tables than it did then (see
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md) for the distribution check). `da --imputations` fits ANCOM-BC2 on every table and
 combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
 complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
 ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that

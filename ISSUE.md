@@ -17,13 +17,13 @@ _최종 갱신: 2026-11-19. 작업 항목은 [TODO.md](TODO.md)._
 
 ## To Go
 3a. **da --imputations가 fit을 순차 실행** — S 수준 fit 10개 × 45분. fit 병렬화(스레드 분할) 검토.
-3. **taxa-table EM이 느림** — RNA 종 수준 2시간 42분(LCA 5분). 다음: crossing 성분 SQUAREM 반복수·imputation 체인 비용 프로파일링.
 4. **round-11 수정분 미검토** — Codex round 11은 "READY AFTER FIXES", 그 수정(링크된 imputations 폴더 거부, dropped_lineages 기록, round_preserving, 정수 추출)은 재검토 안 받음.
 
 ## Waiting
 5. **main 병합 여부** — 사용자 결정 대기. `em-imputation`은 `p257-fixes` 위에 있음.
 
 ## Resolved
+- 2026-11-19: **taxa-table EM이 느림**(RNA 종 수준 2시간 42분, LCA 5분) — 원인: (1) 접평면 gap ≤ 0.5 정지 규칙이 작은 몫의 target 하나 때문에 최대 147,634회 반복(로그우도는 1e-4 수준에서 이미 정지), (2) imputation의 SIR 시작(트리 재귀 256회/체인)과 Gibbs 배정(np.add.at, 체인·성분별 순차). 해결: 라그랑주 쌍대 인증(_dual_gap, 그룹당 1e-4 nat), 배치 Dirichlet-tree 추출, 모든 crossing 성분·M 체인 동시 진행, 클래스 단위 다항 추출. 18 샘플 EM 3,299→432 s, imputation 4,300→551 s; 기대값은 기준보다 최대우도에 더 가까움(+0.17–1.88 nat), imputation 분포 동등(M=200, 3 샘플). 보고서 docs/BENCHMARK_em.md.
 - 2026-11-19: ccloop 런 `unclassified-meta-p257-20261118`(round 4에서 blocked)을 사용자 지시로 종료(`stop`, phase stopped). P257 목표는 이 worktree에서 수동으로 이어 진행됨. 기록 `~/.local/state/ccloop/unclassified-meta-p257-20261118/ccloop.md`.
 - 2026-11-19: **MI 결합이 ANCOM-BC2의 p=1(검정 불가)을 무시함** — ANCOM-BC2는 특징의 dof가 NA면 W가 커도 p=1을 준다(`.ancombc2_core`: `p_hat[is.na(p_hat)] = 1`). `combine_imputations`는 df를 복원하지 못하면 ∞로 두고 p를 다시 계산해, 각 fit에서 검정 불가였던 특징이 유의해졌다(OSD18 RNA 속 수준 q<0.05 70개; Aedoeadaptatus는 모든 fit p=1인데 MI q 9e-57). 해결: p ≥ 1이고 W가 0이 아닌 유한값인 fit은 실패로 처리(`da.py` `combine_imputations`), 회귀 테스트 `test_a_fit_ancombc2_could_not_test_stays_untested_after_pooling`. 재결합 결과 q<0.05 70 → 2(Tobamovirus robust, Ophiobolus).
 - 2026-11-19: EM 실데이터 비수렴(샘플 20, 10만 반복) — 원인: 수치 잡음 step, 평평한 방향, `dominated()` 반복 호출. 해결: 성분별 닫힌 해(Dirichlet tree), 지배 후보 제거, 인증된 likelihood gap(0.5 nat) 정지, projected SQUAREM. 샘플 20: 95초 수렴.
