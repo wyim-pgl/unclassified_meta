@@ -1058,9 +1058,17 @@ as one multinomial (read by read for classes of up to 16 reads). The draws follo
 combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
 complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
 ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
-comes from the assignment. A feature that is not estimable in every fit (filtered, structural zero, failed fit, or
-a test ANCOM-BC2 could not run, which it reports as p = 1 with a nonzero W because the degrees of freedom are
-NA) gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
+comes from the assignment (lambda = (1 + 1/M) B / T; Rubin's gamma, which adds a small-df correction, is larger). A
+feature that is not estimable in every fit (filtered, structural zero, failed fit, or a test ANCOM-BC2 could not
+run) gets p = 1 and stays in the multiple-testing adjustment. ANCOM-BC2 cannot test a feature whose linear model
+has no residual degrees of freedom (nonzero in no more samples than the design has columns); it then reports p = 1
+with a nonzero W, which a real two-sided test never gives (p = 1 only at W = 0). The fits that could test such a
+feature are not pooled on their own: they are the imputations that happened to give it enough nonzero samples, and
+pooling them alone makes sparse features look significant. `n_fits_<term>` counts the fits that estimated and tested
+the feature, `n_untestable_<term>` those that could not test it, and `status_<term>` gives the reason: `pooled`,
+`untestable` (no fit could test it), `partly_untestable`, `not_estimated` (no finite estimate in any fit) or
+`incomplete` (missing, or without a finite p, in some fits). Fits with different coefficients, or fewer than two
+fits, are refused.
 The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
 every fit is not tested, exactly as in a single ANCOM-BC2 run.
 `diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.
@@ -1079,8 +1087,9 @@ unclassified-meta da --counts taxa_S/merged/counts.tsv --features taxa_S/merged/
 
 Give both sides the same number of `--imputations` (the seeds may differ). A side counted without EM (LCA, or the
 panel ledger policy) has no assignment uncertainty and contributes its one table to every imputation; a side
-counted with EM but without imputations is refused by the merge. `--p-adjust` with `--imputations` accepts holm,
-BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
+counted with EM but without imputations is refused by the merge. `--p-adjust` defaults to BH (false discovery
+rate), for the expected-count fit and the combined fits alike; ANCOM-BC2's own default, holm, controls the
+family-wise error rate and is stricter. With `--imputations` it accepts holm, BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
 below 0.3); use 20 or more when it is larger.
 
 ### One organism, one feature: `panel-taxonomy`

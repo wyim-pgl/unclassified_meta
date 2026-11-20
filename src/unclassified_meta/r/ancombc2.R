@@ -3,7 +3,7 @@
 #
 # Usage: Rscript ancombc2.R --counts counts.tsv --features features.tsv --metadata metadata.tsv \
 #          --group group --outdir da [--formula "group + batch"] [--reference-level control] \
-#          [--prv-cut 0.10] [--lib-cut 0] [--struc-zero] [--alpha 0.05] [--p-adjust holm] [--threads 1]
+#          [--prv-cut 0.10] [--lib-cut 0] [--struc-zero] [--alpha 0.05] [--p-adjust BH] [--threads 1]
 #          [--ledger ledger.tsv]   (panel-quant ledger: the abundance plot then shows shares of all fragments)
 #          [--rand-formula "(1|unit)"] [--lme-relax-checks]   (repeated measures: random intercept per unit)
 #
@@ -15,7 +15,7 @@
 
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(formula = NULL, `reference-level` = NULL, `prv-cut` = "0.10", `lib-cut` = "0", `struc-zero` = FALSE,
-            alpha = "0.05", `p-adjust` = "holm", threads = "1", outdir = "da", `rand-formula` = NULL,
+            alpha = "0.05", `p-adjust` = "BH", threads = "1", outdir = "da", `rand-formula` = NULL,
             `lme-relax-checks` = FALSE, `neg-lb` = FALSE)
 i <- 1
 while (i <= length(args)) {

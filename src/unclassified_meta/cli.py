@@ -290,7 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "taxa-table/panel-quant --imputations) and combine the fits with Rubin's rules "
                          "(mi_results.tsv), so that the test includes the uncertainty of the read assignment")
     da.add_argument("--alpha", type=float, default=0.05)
-    da.add_argument("--p-adjust", default="holm")
+    da.add_argument("--p-adjust", default="BH",
+                    help="multiple-testing adjustment per term (R p.adjust method; default BH, the false discovery rate; holm controls the family-wise error rate as ANCOM-BC2's own default does)")
     da.add_argument("-t", "--threads", type=int, default=1)
     da.add_argument("-o", "--outdir", default="da")
     da.add_argument("--rscript", help="Rscript of the R environment (default: $UNCLASSIFIED_META_RSCRIPT, then PATH)")
