@@ -181,3 +181,12 @@ def test_pooled_table_is_internally_consistent():
     assert not out.loc[~pooled, f"diff_{T}"].any() and not out.loc[~pooled, f"diff_robust_{T}"].any()
     assert ((out.loc[pooled, f"fmi_{T}"] >= 0) & (out.loc[pooled, f"fmi_{T}"] < 1)).all()
     assert (out[f"n_fits_{T}"] + out[f"n_untestable_{T}"] <= m).all()
+
+
+def test_da_adjusts_with_bh_by_default():
+    from unclassified_meta.cli import build_parser
+    args = build_parser().parse_args(["da", "--counts", "c.tsv", "--features", "f.tsv", "--metadata", "m.tsv",
+                                      "--group", "g"])
+    assert args.p_adjust == "BH"
+    script = da.SCRIPT.read_text()
+    assert '`p-adjust` = "BH"' in script                     # the R script's own default agrees

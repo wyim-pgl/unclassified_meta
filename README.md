@@ -1071,8 +1071,9 @@ unclassified-meta da --counts taxa_S/merged/counts.tsv --features taxa_S/merged/
 
 Give both sides the same number of `--imputations` (the seeds may differ). A side counted without EM (LCA, or the
 panel ledger policy) has no assignment uncertainty and contributes its one table to every imputation; a side
-counted with EM but without imputations is refused by the merge. `--p-adjust` with `--imputations` accepts holm,
-BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
+counted with EM but without imputations is refused by the merge. `--p-adjust` defaults to BH (false discovery
+rate), for the expected-count fit and the combined fits alike; ANCOM-BC2's own default, holm, controls the
+family-wise error rate and is stricter. With `--imputations` it accepts holm, BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
 below 0.3); use 20 or more when it is larger.
 
 ### One organism, one feature: `panel-taxonomy`

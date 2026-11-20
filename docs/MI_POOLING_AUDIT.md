@@ -92,3 +92,16 @@ not a different pooling rule.
   partly untestable, zero/inf/NaN/negative se, B = 0, absent features, missing/extra coefficients, < 2 fits,
   Rubin/Barnard–Rubin and BH/Holm against R, BH family, internal consistency)
 - `README.md`: MI section describes testability, status and λ
+
+## Decision: BH (2026-11-20)
+
+`da --p-adjust` now defaults to BH in the CLI and in `ancombc2.R`. Both the expected-count fit and the pooled
+imputations are adjusted for the false discovery rate. Holm, ANCOM-BC2's own default, is still available.
+
+The ten genus fits re-pooled with BH are in `OSD18/RNA/repool_fix/mi_results_G_BH.tsv`. The Holm file
+`mi_results_G.tsv` is kept unchanged. BH q < 0.05: Tobamovirus (7.5e-8, robust), Ophiobolus (0.019),
+Ampelomyces (0.020, robust), Potexvirus (0.04999), Carlavirus (0.04999). Two are robust.
+
+Caveat: `diff_robust` needs ANCOM-BC2's own `diff_robust` in at least half of the fits. The saved fits ran with Holm,
+so those per-fit calls are Holm calls. Holm is stricter than BH, so the robust calls here are, if anything,
+understated. A rerun with BH would align them.
