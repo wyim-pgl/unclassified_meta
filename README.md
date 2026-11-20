@@ -593,6 +593,12 @@ classifier's reads. Measured on a synthetic Centrifuger file of 15 million reads
 it for `extract` peaked at 2.7 GB (71 s), `taxa-table --per-read` at 2.0 GB (56 s), i.e. about 130-180 bytes per
 read. Plan roughly 2 GB per 10 million reads.
 
+**`taxa-table --assign em --imputations 10`** (one core, Pronghorn Xeon E5-2683 v4, 2026-11-19): 18 RNA samples
+(74.9 M reads, rank S, with `--merge-panel` and `--panel-taxonomy`) take 27 min and 2.6 GB; before the
+2026-11-19 EM changes the same command took 2 h 44 min. `--assign lca` takes about 5 min; the rest is the EM and
+the imputations. Profile, per-sample numbers, validation and the commands to repeat the benchmark:
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md).
+
 The assembler is the step that needs the most memory. Before assembling, the pipeline estimates the peak
 memory from the number of pooled reads and prints a **WARNING** when the estimate exceeds `--memory` or
 the free memory of the machine, with the subsample size that would fit.
@@ -1048,8 +1054,14 @@ structural-zero check. Use that fit as a quick look; the combined test below is 
 How the expected counts are computed: candidates that share reads form independent groups. A group whose read
 classes are laminar (any two classes disjoint or nested; on real Centrifuger output most groups) has a closed-form
 maximum-likelihood solution, the Dirichlet tree. Any other group is fitted by EM accelerated with SQUAREM until its
-log-likelihood is certified to be within 0.5 of its maximum (tangent-plane bound of the concave likelihood); where
-the likelihood is that flat, the data do not pin the counts down any closer, and the imputations show it.
+log-likelihood is certified to be within 1e-4 of its maximum. The certificate is the Lagrangian dual of the
+mixture likelihood: for any positive class weights it bounds the maximum from above, so the bound is rigorous. With
+the weights at the current fit it is the tangent-plane bound, and lowering the weights of the few classes that hold
+a tiny-share candidate makes it much tighter. Before 2026-11-19 the EM stopped when the tangent-plane bound reached
+0.5. That bound can stay open for 10^5 iterations after the likelihood has stopped changing: EM grows a small share
+only by the factor gradient / N per iteration, and N is every read of the group. The current fits are therefore
+both faster and closer to the maximum (on OSD18 the log-likelihood of every sample is higher, by 0.2-1.9 nats). The
+estimator itself, the maximum-likelihood share, is unchanged.
 
 `--imputations M` writes M integer tables drawn from the posterior of the assignment (Jeffreys Dirichlet prior,
 0.5 per candidate), so the tables carry both the uncertainty of which candidate a read came from and of the
@@ -1059,18 +1071,30 @@ B the Beta(0.5, 1.5) posterior share). Groups with crossing classes use a data-a
 started by sampling-importance-resampling from the exact posterior of their largest-read laminar part, weighted
 by the likelihood of the crossing classes; when those crossing classes hold very many reads the start, and with
 it the draws, are approximate. `fmi` and the per-imputation results show how much the assignment matters. Each sample
-and each side (taxa, panel) has its own random stream. `da --imputations` fits ANCOM-BC2 on every table and
+and each side (taxa, panel) has its own random stream. The same `--seed` gives the same tables on every run. The
+chains of all groups and all M imputations run side by side as arrays, and the reads of a class are drawn together
+as one multinomial (read by read for classes of up to 16 reads). The draws follow the same distributions as before
+2026-11-19 but use the random numbers in a different order, so a seed gives different tables than it did then (see
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md) for the distribution check). `da --imputations` fits ANCOM-BC2 on every table and
 combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
 complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
 ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
-comes from the assignment. The Barnard-Rubin degrees of freedom stay below the complete-data ones even when every
-imputation gives the same estimate (nu_com (nu_com + 1) / (nu_com + 3), e.g. 8.46 for 10; the formula of mice), so
-the pooled test is somewhat more conservative than a single ANCOM-BC2 fit; in a simulation with six samples per group
-and little assignment uncertainty this lowered the power from 12 % (LCA) to 5 % at an unchanged false-discovery rate
-(`docs/reports/simulation_em_mi_20261119/`). A feature that is not estimable in every fit (filtered, structural zero,
-failed fit, or
-a test ANCOM-BC2 could not run, which it reports as p = 1 with a nonzero W because the degrees of freedom are
-NA) gets p = 1 and stays in the multiple-testing adjustment; `n_fits_<term>` says in how many fits it was estimated.
+comes from the assignment (lambda = (1 + 1/M) B / T; Rubin's gamma, which adds a small-df correction, is larger).
+The Barnard-Rubin degrees of freedom stay below the complete-data ones even when
+every imputation gives the same estimate (nu_com (nu_com + 1) / (nu_com + 3), e.g. 8.46 for 10; the formula of mice),
+so the pooled test is somewhat more conservative than a single ANCOM-BC2 fit; in a simulation with six samples per
+group and little assignment uncertainty this lowered the power from 12 % (LCA) to 5 % at an unchanged
+false-discovery rate (`docs/reports/simulation_em_mi_20261119/`). A
+feature that is not estimable in every fit (filtered, structural zero, failed fit, or a test ANCOM-BC2 could not
+run) gets p = 1 and stays in the multiple-testing adjustment. ANCOM-BC2 cannot test a feature whose linear model
+has no residual degrees of freedom (nonzero in no more samples than the design has columns); it then reports p = 1
+with a nonzero W, which a real two-sided test never gives (p = 1 only at W = 0). The fits that could test such a
+feature are not pooled on their own: they are the imputations that happened to give it enough nonzero samples, and
+pooling them alone makes sparse features look significant. `n_fits_<term>` counts the fits that estimated and tested
+the feature, `n_untestable_<term>` those that could not test it, and `status_<term>` gives the reason: `pooled`,
+`untestable` (no fit could test it), `partly_untestable`, `not_estimated` (no finite estimate in any fit) or
+`incomplete` (missing, or without a finite p, in some fits). Fits with different coefficients, or fewer than two
+fits, are refused.
 The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
 every fit is not tested, exactly as in a single ANCOM-BC2 run.
 `diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.
@@ -1096,8 +1120,9 @@ unclassified-meta da --counts taxa_S/merged/counts.tsv --features taxa_S/merged/
 
 Give both sides the same number of `--imputations` (the seeds may differ). A side counted without EM (LCA, or the
 panel ledger policy) has no assignment uncertainty and contributes its one table to every imputation; a side
-counted with EM but without imputations is refused by the merge. `--p-adjust` with `--imputations` accepts holm,
-BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
+counted with EM but without imputations is refused by the merge. `--p-adjust` defaults to BH (false discovery
+rate), for the expected-count fit and the combined fits alike; ANCOM-BC2's own default, holm, controls the
+family-wise error rate and is stricter. With `--imputations` it accepts holm, BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
 below 0.3); use 20 or more when it is larger.
 
 ### Zeros with EM counts: `detection`
@@ -1175,6 +1200,64 @@ reference genomes themselves, as expected for viruses that are only 80.7 % and 8
 
 The design, the counting rule and how each point of the design review was handled are in
 [`docs/DESIGN_centrifuger_ancombc.md`](docs/DESIGN_centrifuger_ancombc.md).
+
+### Strains, read-assignment uncertainty and robustness of differential abundance
+
+Four commands extend the panel workflow. The design, the rules and the exact output columns are in
+[`docs/DESIGN_robustness.md`](docs/DESIGN_robustness.md); each table also states its own rules in its `#` header lines.
+
+```bash
+# 1. how the viral contigs relate to each other and to their reference genome; local haplotypes from the reads
+unclassified-meta strain-evidence --run run --input-dir reads -o strains          # --identity 97,98,99
+# 2. one panel feature per 98 % cluster (repeat with 97 and 99 for the resolution check)
+unclassified-meta panel-build --run run -o panel98 --strain-clusters strains/viral_strain_clusters.tsv \
+    --strain-resolution 98
+unclassified-meta panel-quant --panel panel98 --input-dir reads --ambiguous em -o quant98
+# 3. unique vs shared read support, read bootstrap (100) and posterior realizations (20) of the EM counts
+unclassified-meta em-uncertainty --quant quant98 -o unc98 -t 8
+# 4. ANCOM-BC2, ALDEx2 and LinDA on the same samples, formula and features, refitted on bootstrap and realization
+#    tables, without each sample (or each --unit, e.g. plant) and at other prevalence cuts
+unclassified-meta da-robustness --em-uncertainty unc98 --features quant98/features.tsv --metadata meta.tsv \
+    --group condition --formula 'condition + plant' --unit plant -t 12 -o da98
+unclassified-meta da-resolutions --run 97=da97 --run 98=da98 --run 99=da99 -o resolutions
+```
+
+**What the words mean.** A 97/98/99 % cluster is an *operational sequence cluster*: contigs that look alike, not
+a proven strain. `strain-evidence` upgrades a cluster only with evidence, and names that evidence in the table:
+*candidate strain-like lineage* (it differs from another cluster inside a region both cover, not merely by covering
+another part of the genome, and no member looks chimeric), *phased viral haplotype* (read pairs carry at least
+two of its distinguishing variants together in one local block), *reference-supported viral strain* (its
+consensus matches a reference genome at ≥ 99 % over ≥ 80 % of it). With PE150 reads a block spans at most the
+fragment length (`phasing_limits.tsv` gives read length, insert size, depth and the longest phasable span), so
+haplotypes are **local**: no genome-wide haplotype is claimed from separate blocks.
+
+**Five count matrices stay separate**: fragments counted for one feature only (`unique_counts.tsv`, as observed),
+EM expected fragments, bootstrap realizations, normalized abundance (per million input fragments) and abundance
+summed per parent feature or taxon. A feature whose abundance comes mostly from shared fragments is marked
+`em_driven` and its `assignment_confidence` is low.
+
+**What the bootstrap measures.** Fragments (read pairs, so mates stay together) are resampled within each sample
+and the EM is refitted. This measures read sampling and read-assignment instability. It is **not** biological
+replication: bootstrap tables, realizations and technical replicates are never counted as replicates, and their
+p-values are never pooled. (`da --imputations` pools ANCOM-BC2 fits of posterior imputations with Rubin's rules;
+that is the one justified combination.) ALDEx2's own Monte-Carlo instances model the counting noise of a given
+table, not which feature an ambiguous read belongs to; that uncertainty enters only through the realization and
+bootstrap tables.
+
+**Reading the result.** `robustness_summary.tsv` keeps four dimensions in separate columns: sequence-assignment
+confidence, abundance-estimation stability, differential-abundance support and cross-method agreement, plus
+replicate consistency and (with `--resolution-table`) clustering-resolution stability. `conclusion` is
+`high_confidence` only when the printed rule holds (significant in ≥ 2 methods in one direction, stable under
+bootstrap and realizations, assignment not low, abundance not unstable, no single sample or unit drives it);
+everything else significant is `exploratory`. A result significant in all three methods can still be exploratory.
+Write *"robust across three complementary differential abundance frameworks"*, not *"validated by three
+independent statistical methods"*: the methods analyse the same reads. With about three replicates per group,
+read `replicate_sensitivity.tsv` (leave-one-out, single-sample share, minimal detectable effect) and treat a
+non-significant feature as *not detected*, not as *no effect*.
+
+**R packages.** `da-robustness` needs ALDEx2 and MicrobiomeStat (LinDA) in the R environment
+(`environment-r.yml`; for an existing environment:
+`micromamba install -p <env> -c conda-forge -c bioconda bioconductor-aldex2=1.42.0 r-microbiomestat=1.4`).
 
 ---
 

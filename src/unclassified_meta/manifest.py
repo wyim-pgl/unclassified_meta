@@ -73,7 +73,10 @@ def previous_artifacts(folder: str | Path, name: str = NAME) -> dict:
 
 
 STALE_NAME = re.compile(r"(imputations/(counts|ledger|ancombc2_results|structural_zeros)_\d{3,}\.tsv|collapsed\.tsv"
-                        r"|mi_results\.tsv|mi_structural_zeros\.tsv|unique_counts\.tsv)")
+                        r"|mi_results\.tsv|mi_structural_zeros\.tsv|unique_counts\.tsv"
+                        # em-uncertainty realizations, da-robustness per-fit tables, strain-evidence figures
+                        r"|(bootstrap|realizations)/counts_\d{3,}\.tsv|fits/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.(tsv|txt)"
+                        r"|figures/[A-Za-z0-9_.-]+\.(png|pdf))")
 
 
 def remove_stale(folder: str | Path, previous: dict, keep) -> None:

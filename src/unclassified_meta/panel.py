@@ -44,7 +44,7 @@ log = logging.getLogger("unclassified_meta")
 
 FEATURE_COLUMNS = ["feature_id", "label", "namespace", "accession", "identity_class", "n_sequences",
                    "total_length", "evidence", "n_contigs", "weighted_identity", "identity_min", "identity_max",
-                   "mixed_identity", "reference_included", "best_hit_title"]
+                   "mixed_identity", "reference_included", "best_hit_title", "parent_feature"]
 
 
 # ---------------------------------------------------------------- feature definition (pure, unit-tested)
@@ -74,16 +74,64 @@ def weighted_mean(values: list[float], weights: list[float]) -> float | None:
     return sum(v * x for v, x in zip(values, weights)) / w if w > 0 else (sum(values) / len(values) if values else None)
 
 
+def _bin_row(ns: str, acc: str, kind: str, members: list, weights: dict[str, float] | None,
+             same_identity: float) -> dict:
+    """One feature row from the contigs of a bin (members: (record, method, hit, title))."""
+    recs = [m[0] for m in members]
+    # identity of a nucleotide bin = nucleotide identity of its BLASTN hits only; TBLASTX identities are
+    # amino-acid identities and are not mixed in (a translated hit can never make a bin 'same')
+    idrec = [m[0] for m in members if pd.notna(m[0].identity) and str(m[0].identity) != ""
+             and (kind != "nt" or "tblastx" not in m[1])]
+    ids = [float(x.identity) for x in idrec]
+    wts = [float((weights or {}).get(x.contig, 0) or 0) for x in idrec]
+    if not weights or sum(wts) == 0:
+        wts = [float(x.length) for x in idrec]
+    wid = weighted_mean(ids, wts)
+    methods = sorted({m[1] for m in members})
+    title = Counter(m[3] for m in members).most_common(1)[0][0]
+    mixed = False
+    if kind == "nt":
+        cls = "same" if (wid is not None and wid >= same_identity) else "like"
+        total = sum(wts) or 1.0
+        hi = sum(w for i, w in zip(ids, wts) if i >= same_identity) / total
+        mixed = 0.1 <= hi <= 0.9          # contigs on both sides of the threshold: possibly two entities
+        name = clean_title(title, acc)
+        label = name if cls == "same" else f"{name}-like"
+    elif kind == "protein_like":
+        cls = "protein_like"
+        label = f"{organism_of(title) or clean_title(title, acc)}-like (protein only)"
+    elif kind == "kraken2":
+        cls, label = "kraken2", f"{title or acc} (Kraken2 contig assignment)"
+    else:
+        cls, label = "unmatched", f"unmatched sequence {acc.replace('_', ' ')}"
+    hits = sorted({m[2] for m in members if m[2]})
+    return {"feature_id": f"{ns}|{acc}|{cls}", "label": label, "namespace": ns, "accession": acc,
+            "identity_class": cls, "n_sequences": len(recs), "total_length": int(sum(int(x.length) for x in recs)),
+            "evidence": ";".join(methods) + (f" ({','.join(hits[:5])}{',...' if len(hits) > 5 else ''})"
+                                             if kind == "protein_like" else ""),
+            "n_contigs": len(recs),
+            # nucleotide identity only; amino-acid identities of protein-only bins are not comparable
+            "weighted_identity": round(wid, 2) if (wid is not None and kind == "nt") else "",
+            "identity_min": round(min(ids), 2) if (ids and kind == "nt") else "",
+            "identity_max": round(max(ids), 2) if (ids and kind == "nt") else "",
+            "mixed_identity": mixed, "reference_included": False, "best_hit_title": title, "parent_feature": ""}
+
+
 def define_features(contigs: pd.DataFrame, weights: dict[str, float] | None, categories: set[str],
                     namespaces: dict[str, str], same_identity: float = 95.0,
                     clusters: dict[str, int] | None = None,
-                    only_contigs: set[str] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
+                    only_contigs: set[str] | None = None,
+                    strain_clusters: dict[str, str] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
     """Bin the selected contigs into features.
 
-    contigs     contig_category.tsv (contig, length, category, layer, method, best_hit, best_hit_title, identity)
-    weights     pooled read-back fragments per contig (identity is weighted by them; contig length when absent)
-    namespaces  {'virus': ..., 'virus_protein': ..., 'extra_virus': ...} versioned namespace strings
-    clusters    contig -> cluster number for contigs without a reference match
+    contigs          contig_category.tsv (contig, length, category, layer, method, best_hit, best_hit_title, identity)
+    weights          pooled read-back fragments per contig (identity is weighted by them; contig length when absent)
+    namespaces       {'virus': ..., 'virus_protein': ..., 'extra_virus': ...} versioned namespace strings
+    clusters         contig -> cluster number for contigs without a reference match
+    strain_clusters  contig -> operational cluster id (strain-evidence, e.g. c98_003): the nucleotide bin of a
+                     reference is split, one feature per cluster (feature_id ns|acc|class|c98_003, label suffixed
+                     [c98_003], parent_feature = the feature id the whole bin would have had). Contigs of the bin
+                     without a cluster stay in an ordinary bin of the remaining contigs.
     Returns (features table, contig -> feature_id).
     """
     if only_contigs is not None:
@@ -117,47 +165,20 @@ def define_features(contigs: pd.DataFrame, weights: dict[str, float] | None, cat
 
     rows, c2f = [], {}
     for (ns, acc, kind), members in bins.items():
-        recs = [m[0] for m in members]
-        # identity of a nucleotide bin = nucleotide identity of its BLASTN hits only; TBLASTX identities are
-        # amino-acid identities and are not mixed in (a translated hit can never make a bin 'same')
-        idrec = [m[0] for m in members if pd.notna(m[0].identity) and str(m[0].identity) != ""
-                 and (kind != "nt" or "tblastx" not in m[1])]
-        ids = [float(x.identity) for x in idrec]
-        wts = [float((weights or {}).get(x.contig, 0) or 0) for x in idrec]
-        if not weights or sum(wts) == 0:
-            wts = [float(x.length) for x in idrec]
-        wid = weighted_mean(ids, wts)
-        methods = sorted({m[1] for m in members})
-        title = Counter(m[3] for m in members).most_common(1)[0][0]
-        mixed = False
-        if kind == "nt":
-            cls = "same" if (wid is not None and wid >= same_identity) else "like"
-            total = sum(wts) or 1.0
-            hi = sum(w for i, w in zip(ids, wts) if i >= same_identity) / total
-            mixed = 0.1 <= hi <= 0.9          # contigs on both sides of the threshold: possibly two entities
-            name = clean_title(title, acc)
-            label = name if cls == "same" else f"{name}-like"
-        elif kind == "protein_like":
-            cls = "protein_like"
-            label = f"{organism_of(title) or clean_title(title, acc)}-like (protein only)"
-        elif kind == "kraken2":
-            cls, label = "kraken2", f"{title or acc} (Kraken2 contig assignment)"
-        else:
-            cls, label = "unmatched", f"unmatched sequence {acc.replace('_', ' ')}"
-        fid = f"{ns}|{acc}|{cls}"
-        hits = sorted({m[2] for m in members if m[2]})
-        rows.append({"feature_id": fid, "label": label, "namespace": ns, "accession": acc, "identity_class": cls,
-                     "n_sequences": len(recs), "total_length": int(sum(int(x.length) for x in recs)),
-                     "evidence": ";".join(methods) + (f" ({','.join(hits[:5])}{',...' if len(hits) > 5 else ''})"
-                                                      if kind == "protein_like" else ""),
-                     "n_contigs": len(recs),
-                     # nucleotide identity only; amino-acid identities of protein-only bins are not comparable
-                     "weighted_identity": round(wid, 2) if (wid is not None and kind == "nt") else "",
-                     "identity_min": round(min(ids), 2) if (ids and kind == "nt") else "",
-                     "identity_max": round(max(ids), 2) if (ids and kind == "nt") else "",
-                     "mixed_identity": mixed, "reference_included": False, "best_hit_title": title})
-        for x in recs:
-            c2f[x.contig] = fid
+        groups: dict[str, list] = defaultdict(list)
+        for m in members:
+            groups[(strain_clusters or {}).get(m[0].contig, "") if kind == "nt" else ""].append(m)
+        split = len(groups) > 1 or "" not in groups
+        parent = _bin_row(ns, acc, kind, members, weights, same_identity)["feature_id"] if split else ""
+        for cid in sorted(groups):
+            row = _bin_row(ns, acc, kind, groups[cid], weights, same_identity)
+            if cid:
+                row["feature_id"] = f"{row['feature_id']}|{cid}"
+                row["label"] = f"{row['label']} [{cid}]"
+                row["parent_feature"] = parent
+            rows.append(row)
+            for m in groups[cid]:
+                c2f[m[0].contig] = row["feature_id"]
     feats = pd.DataFrame(rows, columns=FEATURE_COLUMNS)
     if len(feats):
         feats = feats.sort_values(["total_length", "feature_id"], ascending=[False, True]).reset_index(drop=True)
@@ -316,7 +337,8 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
                 virus: str | None, refs_dir: str | None, extra_targets: str | None = None,
                 contig_list: str | None = None, same_identity: float = 95.0, add_reference_genomes: bool = True,
                 other_contig_decoy: bool = True, threads: int = 4, use_run_hosts: bool = True,
-                use_run_rrna: bool = True) -> Path:
+                use_run_rrna: bool = True, strain_clusters: str | None = None,
+                strain_resolution: float = 98.0) -> Path:
     require("bowtie2-build", "seqkit")
     run_dir, outdir = Path(run_dir), Path(outdir)
     ctab, cfa = run_dir / "tables" / "contig_category.tsv", run_dir / "contigs" / "contigs.fa"
@@ -359,7 +381,17 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
             raise ValueError(f"{label} {f} has no sequence; give a non-empty FASTA or leave this decoy out "
                              "(--no-host-decoy / --no-rrna-decoy)")
     refuse_overlap([outdir / n for n in PANEL_ARTIFACTS + ("provenance.json",)],
-                   [ctab, cfa, run_dir / "tables" / "contig_counts.tsv", virus, rrna, extra_targets, uref.get("extra_virus_fasta")] + [h["fasta"] for h in hosts], "panel-build")
+                   [ctab, cfa, run_dir / "tables" / "contig_counts.tsv", virus, rrna, extra_targets, uref.get("extra_virus_fasta"),
+                    strain_clusters] + [h["fasta"] for h in hosts], "panel-build")
+    strain_map = None
+    if strain_clusters:
+        # operational clusters of strain-evidence (sealed; made from this very run's contig table)
+        from .strains import read_strain_clusters
+        strain_map, sc_rec = read_strain_clusters(strain_clusters, strain_resolution)
+        made_from = ((sc_rec.get("inputs") or {}).get("contig_category.tsv") or {}).get("sha256")
+        if made_from != sha256(ctab):
+            raise ValueError(f"--strain-clusters {strain_clusters} was made from another contig table than "
+                             f"{ctab}; run strain-evidence on this run")
     outdir.mkdir(parents=True, exist_ok=True)
     # a rebuild first invalidates the old panel: without provenance.json panel-quant refuses the folder, so an
     # interrupted rebuild can never be mistaken for the previous panel
@@ -395,7 +427,15 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
         log.warning("%s not found (run made by an older version): namespaces are taken from the current %s",
                     used_refs, refs_dir or "references")
         namespaces, refs_version = refs_namespaces(refs_dir, extra_virus)
-    feats, c2f = define_features(contigs, weights, cats, namespaces, same_identity, clusters, only)
+    if strain_map is not None:
+        unknown = sorted(set(strain_map) - set(contigs["contig"]))
+        if unknown:
+            raise ValueError(f"--strain-clusters names {len(unknown)} contigs that are not in {ctab}: "
+                             f"{', '.join(unknown[:3])}")
+    feats, c2f = define_features(contigs, weights, cats, namespaces, same_identity, clusters, only, strain_map)
+    # a reference split into operational clusters: its genome stays one feature of its own next to the clusters
+    split_parent = {(r.namespace, r.accession): r.parent_feature for r in feats.itertuples()
+                    if isinstance(r.parent_feature, str) and r.parent_feature}
 
     # reference genomes hit by nucleotide bins: RefSeq viral genomes and the run's extra virus FASTA, each from
     # its own file and namespace, so every "X-like" bin competes with the genome it was named after
@@ -427,17 +467,20 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
                                  "classified with, or --no-reference-genomes.")
             for acc, seq in read_fasta(out):
                 r = want[acc]
-                if r.identity_class == "same":
+                parent = split_parent.get((r.namespace, acc), "")
+                if r.identity_class == "same" and not parent:
                     ref_feature[(src_key, acc)] = r.feature_id
                 else:
                     fid = f"{r.namespace}|{acc}|reference"
                     ref_feature[(src_key, acc)] = fid
                     ref_rows.append({"feature_id": fid, "label": f"{clean_title(r.best_hit_title, acc)} (reference genome)",
                                      "namespace": r.namespace, "accession": acc, "identity_class": "reference",
-                                     "n_sequences": 0, "total_length": 0, "evidence": "reference genome of a 'like' bin",
+                                     "n_sequences": 0, "total_length": 0,
+                                     "evidence": ("reference genome of a bin split into operational clusters"
+                                                  if parent else "reference genome of a 'like' bin"),
                                      "n_contigs": 0, "weighted_identity": "", "identity_min": "", "identity_max": "",
                                      "mixed_identity": False, "reference_included": True,
-                                     "best_hit_title": r.best_hit_title})
+                                     "best_hit_title": r.best_hit_title, "parent_feature": parent})
     feats = pd.concat([feats, pd.DataFrame(ref_rows, columns=FEATURE_COLUMNS)], ignore_index=True) if ref_rows else feats
 
     # write the panel FASTA
@@ -487,7 +530,8 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
                                    "accession": sid, "identity_class": "reference", "n_sequences": 1,
                                    "total_length": len(seq), "evidence": "extra target (user FASTA)", "n_contigs": 0,
                                    "weighted_identity": "", "identity_min": "", "identity_max": "",
-                                   "mixed_identity": False, "reference_included": True, "best_hit_title": titles[sid]})
+                                   "mixed_identity": False, "reference_included": True, "best_hit_title": titles[sid],
+                                   "parent_feature": ""})
         if extra_rows:
             feats = pd.concat([feats, pd.DataFrame(extra_rows, columns=FEATURE_COLUMNS)], ignore_index=True)
         decoys = []
@@ -548,6 +592,8 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
         inputs[f"host:{h['name']}"] = Path(h["fasta"])
     if extra_targets:
         inputs["extra_targets"] = Path(extra_targets)
+    if strain_clusters:
+        inputs["strain_clusters"] = Path(strain_clusters)
     artifacts = artifact_identities(outdir)
     prov = {
         "unclassified_meta_version": __version__, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -556,7 +602,9 @@ def build_panel(run_dir: Path, outdir: Path, categories: list[str], hosts: list[
         "parameters": {"categories": sorted(cats), "contig_list": contig_list, "same_identity": same_identity,
                        "add_reference_genomes": add_reference_genomes, "other_contig_decoy": other_contig_decoy,
                        "host_decoys": [h["name"] for h in hosts], "rrna_decoy": bool(rrna),
-                       "unmatched_cluster_min_identity": 90.0, "unmatched_cluster_min_cover": 0.5},
+                       "unmatched_cluster_min_identity": 90.0, "unmatched_cluster_min_cover": 0.5,
+                       "strain_clusters": str(Path(strain_clusters).resolve()) if strain_clusters else None,
+                       "strain_resolution": strain_resolution if strain_clusters else None},
         "namespaces": namespaces, "refs_version": refs_version,
         "inputs": {k: {"path": str(Path(v).resolve()), "sha256": sha256(Path(v))} for k, v in inputs.items()},
         "tools": {"bowtie2": tool_version(["bowtie2", "--version"]).split("version")[-1].strip(),
@@ -614,6 +662,41 @@ def verify_panel(panel: Path) -> dict:
 # ---------------------------------------------------------------- quant tables: sealed provenance
 
 QUANT_ARTIFACTS = ("counts.tsv", "ledger.tsv", "features.tsv")
+# per-sample fragment classes (the candidate features/decoys of each fragment's best alignments) and the fragments
+# counted for one feature only; written on every run, read by `em-uncertainty` (bootstrap, unique support)
+CLASS_ARTIFACTS = ("equivalence_classes.tsv", "unique_counts.tsv")
+
+
+def write_class_tables(folder: Path, samples: list, classes: dict, feature_ids: list) -> None:
+    """equivalence_classes.tsv: sample, candidates (';'-joined, sorted; empty = unmapped), fragments - every
+    fragment of every sample once. unique_counts.tsv: feature x sample fragments whose best alignments fall in
+    that one feature only (the directly observed counts, never replaced by EM shares)."""
+    rows = [(s.name, ";".join(c), int(n)) for s in samples for c, n in sorted(classes[s.name].items()) if n]
+    pd.DataFrame(rows, columns=["sample", "candidates", "fragments"]).to_csv(
+        folder / "equivalence_classes.tsv", sep="\t", index=False)
+    uniq = pd.DataFrame({"feature_id": feature_ids})
+    for s in samples:
+        own = {c[0]: int(n) for c, n in classes[s.name].items() if len(c) == 1}
+        uniq[s.name] = [own.get(f, 0) for f in feature_ids]
+    uniq.to_csv(folder / "unique_counts.tsv", sep="\t", index=False)
+
+
+def read_class_tables(qdir: Path) -> tuple[dict, "pd.DataFrame"]:
+    """({sample: {candidate tuple: fragments}}, unique counts) of a sealed panel-quant folder; tuple () holds the
+    unmapped fragments."""
+    rec = verify_quant(Path(qdir))
+    missing = [n for n in CLASS_ARTIFACTS if n not in rec["artifacts"]]
+    if missing:
+        raise ValueError(f"{qdir} has no {', '.join(missing)}; run panel-quant again with this version")
+    ec = pd.read_csv(Path(qdir) / "equivalence_classes.tsv", sep="\t", dtype={"sample": str, "candidates": str},
+                     keep_default_na=False)
+    out: dict = {}
+    for s, c, n in ec.itertuples(index=False):
+        key = tuple(c.split(";")) if c else ()
+        d = out.setdefault(s, {})
+        d[key] = d.get(key, 0) + int(n)
+    uniq = pd.read_csv(Path(qdir) / "unique_counts.tsv", sep="\t", dtype={"feature_id": str})
+    return out, uniq
 
 
 def write_quant_provenance(qdir: Path, record: dict, extra: list | None = None) -> None:
@@ -727,7 +810,7 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
     options = f"{preset} -k {int(max_alignments)}"
     counts, ledger_rows = {}, []
     decoy_classes = sorted({v for v in seq2feature.values() if v.startswith(DECOY_PREFIX)})
-    fits, inputs, em_info = {}, {}, {}
+    fits, inputs, em_info, all_classes = {}, {}, {}, {}
     for s in samples:
         key = params_key("panel-quant", "classes-v1", prov["panel_id"], file_id(s.r1), file_id(s.r2), options)
         cache = work / f"{s.name}.json"
@@ -746,6 +829,7 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
                    "wall_s": res["wall_s"], "max_rss_gb": res["max_rss_gb"]}
             cache.write_text(json.dumps(rec))
         classes = {tuple(c): n for c, n in rec["classes"]}
+        all_classes[s.name] = classes
         inputs[s.name] = (rec["input_fragments"], classes.get((), 0))
         rec["features"], rec["ledger"] = _ledger_policy(classes)
         shared = 0
@@ -788,7 +872,8 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
     table.to_csv(stage / "counts.tsv", sep="\t", index=False, float_format="%.6f" if ambiguous == "em" else None)
     pd.DataFrame(ledger_rows).to_csv(stage / "ledger.tsv", sep="\t", index=False)
     feats.to_csv(stage / "features.tsv", sep="\t", index=False)
-    imp_names = []
+    write_class_tables(stage, samples, all_classes, list(feats["feature_id"]))
+    imp_names = list(CLASS_ARTIFACTS)
     if imputations:
         (stage / "imputations").mkdir()
     draws = {}
@@ -816,7 +901,7 @@ def quantify(panel: Path, samples: list[Sample], outdir: Path, threads: int = 8,
             df.to_csv(stage / name, sep="\t", index=False)
             imp_names.append(name)
     manifest.remove_stale(outdir, previous, imp_names)
-    if imp_names:
+    if imputations:
         (outdir / "imputations").mkdir(exist_ok=True)
     for name in list(QUANT_ARTIFACTS) + imp_names:
         os.replace(stage / name, outdir / name)
