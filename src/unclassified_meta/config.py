@@ -189,7 +189,7 @@ def read_samplesheet(path: str | Path) -> list[Sample]:
 RESERVED_SAMPLE_NAMES = frozenset({
     "feature_id", "label", "namespace", "accession", "identity_class", "n_sequences", "total_length", "evidence",
     "n_contigs", "weighted_identity", "identity_min", "identity_max", "mixed_identity", "reference_included",
-    "best_hit_title", "rank", "lineage", "source", "contig", "sample", "category"})
+    "best_hit_title", "parent_feature", "rank", "lineage", "source", "contig", "sample", "category"})
 
 
 def check_sample_names(names, where: str = "samples") -> None:

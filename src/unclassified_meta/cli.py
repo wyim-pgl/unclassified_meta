@@ -1,5 +1,5 @@
 """Command-line interface: run, extract, detect, download-refs, config, panel-build, panel-quant, taxa-table,
-control-reads, control-summary, da, seal-refs.
+control-reads, control-summary, da, seal-refs, strain-evidence, em-uncertainty, da-robustness, da-resolutions.
 
 Every command that writes runs `_guard` before its first write (log file and sample sheet included): it refuses
 an output folder that holds, or lies inside, an input, and takes an exclusive lock on the output folder so a
@@ -183,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--no-rrna-decoy", action="store_true")
     pb.add_argument("--no-other-contig-decoy", action="store_true",
                     help="do not add the run's other contigs as decoys")
+    pb.add_argument("--strain-clusters", metavar="FILE",
+                    help="viral_strain_clusters.tsv of strain-evidence: one feature per operational cluster")
+    pb.add_argument("--strain-resolution", type=float, default=98.0,
+                    help="cluster resolution (%% identity) used with --strain-clusters, e.g. 97, 98, 99 (default: 98)")
     pb.add_argument("-t", "--threads", type=int, default=8)
 
     pq = sub.add_parser("panel-quant", help="count all reads of every sample against a panel (one fragment policy)")
@@ -320,6 +324,20 @@ def build_parser() -> argparse.ArgumentParser:
     sr.add_argument("refs_dir", help="the folder with viral/, rrna/, protein/ (the layout of download-refs)")
     sr.add_argument("--version", dest="versions", action="append", default=[], metavar="NAME=VERSION",
                     help="release of a reference, e.g. refseq_viral=230 (repeatable; unrecorded ones are 'unknown')")
+
+    # robustness extension (docs/DESIGN_robustness.md); the modules own their options
+    from . import robustness, strains, uncertainty
+    se = sub.add_parser("strain-evidence", help="viral contig overlap, operational 97/98/99 %% clusters, chimera flags "
+                                                "and local read-based haplotypes (clusters are not haplotypes)")
+    strains.add_arguments(se)
+    eu = sub.add_parser("em-uncertainty", help="unique vs EM-shared support, read bootstrap and posterior "
+                                               "realizations of a panel-quant table")
+    uncertainty.add_arguments(eu)
+    dr = sub.add_parser("da-robustness", help="ANCOM-BC2, ALDEx2 and LinDA on matched designs: bootstrap, "
+                                              "realization, leave-one-out and filter stability, concordance")
+    robustness.add_arguments_robustness(dr)
+    dres = sub.add_parser("da-resolutions", help="consistency of da-robustness results across clustering resolutions")
+    robustness.add_arguments_resolutions(dres)
     return ap
 
 
@@ -377,7 +395,8 @@ def _dispatch(args, stack) -> int:
                 [] if args.no_host_decoy else _hosts(args.host), None if args.no_rrna_decoy else args.rrna,
                 args.virus, args.refs, args.extra_targets, args.contigs, args.same_identity,
                 not args.no_reference_genomes, not args.no_other_contig_decoy, args.threads,
-                use_run_hosts=not args.no_host_decoy, use_run_rrna=not args.no_rrna_decoy)
+                use_run_hosts=not args.no_host_decoy, use_run_rrna=not args.no_rrna_decoy,
+                strain_clusters=args.strain_clusters, strain_resolution=args.strain_resolution)
             print(open(out / "features.tsv").read())
             print(f"panel: {out}")
         elif args.cmd in ("panel-quant", "taxa-table") and getattr(args, "seed", 0) < 0:
@@ -522,6 +541,22 @@ def _dispatch(args, stack) -> int:
             _guard(stack, "run", cfg["outdir"], _inputs(args, samples, [cfg.get("references", {})]))
             rep = run(cfg, samples)
             print(f"report: {rep}")
+        # strain-evidence, da-robustness and da-resolutions check and lock their output folder themselves
+        elif args.cmd == "strain-evidence":
+            from . import strains
+            return strains.main(args)
+        elif args.cmd == "em-uncertainty":
+            from . import uncertainty
+            outdir = _guard(stack, "em-uncertainty", args.outdir, _inputs(args))
+            setup_logging(outdir / "em-uncertainty.log")
+            uncertainty.main(args)
+            print(f"em-uncertainty: {outdir}")
+        elif args.cmd == "da-robustness":
+            from . import robustness
+            return robustness.main_robustness(args)
+        elif args.cmd == "da-resolutions":
+            from . import robustness
+            return robustness.main_resolutions(args)
     return 0
 
 

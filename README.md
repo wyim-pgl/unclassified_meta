@@ -1123,6 +1123,64 @@ reference genomes themselves, as expected for viruses that are only 80.7 % and 8
 The design, the counting rule and how each point of the design review was handled are in
 [`docs/DESIGN_centrifuger_ancombc.md`](docs/DESIGN_centrifuger_ancombc.md).
 
+### Strains, read-assignment uncertainty and robustness of differential abundance
+
+Four commands extend the panel workflow. The design, the rules and the exact output columns are in
+[`docs/DESIGN_robustness.md`](docs/DESIGN_robustness.md); each table also states its own rules in its `#` header lines.
+
+```bash
+# 1. how the viral contigs relate to each other and to their reference genome; local haplotypes from the reads
+unclassified-meta strain-evidence --run run --input-dir reads -o strains          # --identity 97,98,99
+# 2. one panel feature per 98 % cluster (repeat with 97 and 99 for the resolution check)
+unclassified-meta panel-build --run run -o panel98 --strain-clusters strains/viral_strain_clusters.tsv \
+    --strain-resolution 98
+unclassified-meta panel-quant --panel panel98 --input-dir reads --ambiguous em -o quant98
+# 3. unique vs shared read support, read bootstrap (100) and posterior realizations (20) of the EM counts
+unclassified-meta em-uncertainty --quant quant98 -o unc98 -t 8
+# 4. ANCOM-BC2, ALDEx2 and LinDA on the same samples, formula and features, refitted on bootstrap and realization
+#    tables, without each sample (or each --unit, e.g. plant) and at other prevalence cuts
+unclassified-meta da-robustness --em-uncertainty unc98 --features quant98/features.tsv --metadata meta.tsv \
+    --group condition --formula 'condition + plant' --unit plant -t 12 -o da98
+unclassified-meta da-resolutions --run 97=da97 --run 98=da98 --run 99=da99 -o resolutions
+```
+
+**What the words mean.** A 97/98/99 % cluster is an *operational sequence cluster*: contigs that look alike, not
+a proven strain. `strain-evidence` upgrades a cluster only with evidence, and names that evidence in the table:
+*candidate strain-like lineage* (it differs from another cluster inside a region both cover, not merely by covering
+another part of the genome, and no member looks chimeric), *phased viral haplotype* (read pairs carry at least
+two of its distinguishing variants together in one local block), *reference-supported viral strain* (its
+consensus matches a reference genome at ≥ 99 % over ≥ 80 % of it). With PE150 reads a block spans at most the
+fragment length (`phasing_limits.tsv` gives read length, insert size, depth and the longest phasable span), so
+haplotypes are **local**: no genome-wide haplotype is claimed from separate blocks.
+
+**Five count matrices stay separate**: fragments counted for one feature only (`unique_counts.tsv`, as observed),
+EM expected fragments, bootstrap realizations, normalized abundance (per million input fragments) and abundance
+summed per parent feature or taxon. A feature whose abundance comes mostly from shared fragments is marked
+`em_driven` and its `assignment_confidence` is low.
+
+**What the bootstrap measures.** Fragments (read pairs, so mates stay together) are resampled within each sample
+and the EM is refitted. This measures read sampling and read-assignment instability. It is **not** biological
+replication: bootstrap tables, realizations and technical replicates are never counted as replicates, and their
+p-values are never pooled. (`da --imputations` pools ANCOM-BC2 fits of posterior imputations with Rubin's rules;
+that is the one justified combination.) ALDEx2's own Monte-Carlo instances model the counting noise of a given
+table, not which feature an ambiguous read belongs to; that uncertainty enters only through the realization and
+bootstrap tables.
+
+**Reading the result.** `robustness_summary.tsv` keeps four dimensions in separate columns: sequence-assignment
+confidence, abundance-estimation stability, differential-abundance support and cross-method agreement, plus
+replicate consistency and (with `--resolution-table`) clustering-resolution stability. `conclusion` is
+`high_confidence` only when the printed rule holds (significant in ≥ 2 methods in one direction, stable under
+bootstrap and realizations, assignment not low, abundance not unstable, no single sample or unit drives it);
+everything else significant is `exploratory`. A result significant in all three methods can still be exploratory.
+Write *"robust across three complementary differential abundance frameworks"*, not *"validated by three
+independent statistical methods"*: the methods analyse the same reads. With about three replicates per group,
+read `replicate_sensitivity.tsv` (leave-one-out, single-sample share, minimal detectable effect) and treat a
+non-significant feature as *not detected*, not as *no effect*.
+
+**R packages.** `da-robustness` needs ALDEx2 and MicrobiomeStat (LinDA) in the R environment
+(`environment-r.yml`; for an existing environment:
+`micromamba install -p <env> -c conda-forge -c bioconda bioconductor-aldex2=1.42.0 r-microbiomestat=1.4`).
+
 ---
 
 ## 11. Checking classifier thresholds with reversed control reads
