@@ -1,5 +1,5 @@
 """Command-line interface: run, extract, detect, download-refs, config, panel-build, panel-quant, taxa-table,
-control-reads, control-summary, da, seal-refs.
+control-reads, control-summary, da, seal-refs, strain-evidence, em-uncertainty, da-robustness, da-resolutions.
 
 Every command that writes runs `_guard` before its first write (log file and sample sheet included): it refuses
 an output folder that holds, or lies inside, an input, and takes an exclusive lock on the output folder so a
@@ -183,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--no-rrna-decoy", action="store_true")
     pb.add_argument("--no-other-contig-decoy", action="store_true",
                     help="do not add the run's other contigs as decoys")
+    pb.add_argument("--strain-clusters", metavar="FILE",
+                    help="viral_strain_clusters.tsv of strain-evidence: one feature per operational cluster")
+    pb.add_argument("--strain-resolution", type=float, default=98.0,
+                    help="cluster resolution (%% identity) used with --strain-clusters, e.g. 97, 98, 99 (default: 98)")
     pb.add_argument("-t", "--threads", type=int, default=8)
 
     pq = sub.add_parser("panel-quant", help="count all reads of every sample against a panel (one fragment policy)")
@@ -195,6 +199,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "`extract`/`run` (auto: recognised from the folder). Recorded for `taxa-table --merge-panel`.")
     pq.add_argument("--input-summary", help="tables/input_summary.tsv of the extract run (found automatically "
                                             "when --input-dir is its unclassified_reads/ folder)")
+    pq.add_argument("--ambiguous", choices=["ledger", "em"], default="ledger",
+                    help="fragments whose best alignments fall in several features: 'ledger' books them as ambiguous "
+                         "and counts them for none (default); 'em' shares them by the features' estimated abundance")
+    pq.add_argument("--imputations", type=int, default=0,
+                    help="with --ambiguous em: also write this many tables with every ambiguous fragment drawn to one "
+                         "candidate (for `da --imputations`)")
+    pq.add_argument("--seed", type=int, default=1, help="random seed of the imputations (default 1)")
     pq.add_argument("-t", "--threads", type=int, default=8)
 
     tt = sub.add_parser("taxa-table", help="single-rank taxon x sample counts from Kraken-style reports, or from "
@@ -215,6 +226,14 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--names", help="names.dmp of that taxonomy (or: centrifuger-inspect -x INDEX --name-table)")
     pr.add_argument("--min-score", type=int, default=0, help="same value as for `extract` / `run` (default 0)")
     pr.add_argument("--min-hitlen", type=int, default=0, help="same value as for `extract` / `run` (default 0)")
+    pr.add_argument("--assign", choices=["lca", "em"], default="lca",
+                    help="reads with several accepted taxIDs (Centrifuger -k > 1): 'lca' gives their lowest common "
+                         "ancestor (default); 'em' shares them among the candidates by their estimated abundance "
+                         "(expected counts)")
+    pr.add_argument("--imputations", type=int, default=0,
+                    help="with --assign em: also write this many count tables with every ambiguous read drawn to one "
+                         "candidate (for `da --imputations`; 10-20 is usual)")
+    pr.add_argument("--seed", type=int, default=1, help="random seed of the imputations (default 1)")
     tt.add_argument("--rank", default="S", choices=["D", "K", "P", "C", "O", "F", "G", "S"],
                     help="Kraken rank code of the taxa (default S = species); one rank only")
     tt.add_argument("--drop-lineage", default="", help="comma-separated names or taxIDs; these rows and everything "
@@ -226,6 +245,10 @@ def build_parser() -> argparse.ArgumentParser:
     m = tt.add_argument_group("merge with a panel table (background features for `da`)")
     m.add_argument("--merge-panel", metavar="QUANT/counts.tsv", help="counts.tsv of panel-quant for the same samples")
     m.add_argument("--merge-panel-features", help="features.tsv of the panel (default: next to the counts)")
+    m.add_argument("--panel-taxonomy", metavar="TSV",
+                   help="feature_id -> taxid of the panel features (from `panel-taxonomy`): a feature assigned to a "
+                        "taxon at or below --rank is added to that taxon's row, so one organism is one feature "
+                        "(needs --nodes/--names)")
     m.add_argument("--panel-lineage", help="lineage(s) the panel covers, e.g. Viruses; dropped from the reports. "
                                            "Required when panel-quant counted ALL reads; 'none' to state that the "
                                            "classifier database does not hold the panel's organisms")
@@ -266,8 +289,13 @@ def build_parser() -> argparse.ArgumentParser:
     da.add_argument("--neg-lb", action="store_true",
                     help="with --struc-zero: also treat features whose abundance in a group has a negative lower "
                          "confidence bound (rare but present) as structural zeros (ANCOM-BC2 neg_lb; off by default)")
+    da.add_argument("--imputations", action="store_true",
+                    help="also fit every imputation table sealed next to --counts (ambiguous reads drawn by "
+                         "taxa-table/panel-quant --imputations) and combine the fits with Rubin's rules "
+                         "(mi_results.tsv), so that the test includes the uncertainty of the read assignment")
     da.add_argument("--alpha", type=float, default=0.05)
-    da.add_argument("--p-adjust", default="holm")
+    da.add_argument("--p-adjust", default="BH",
+                    help="multiple-testing adjustment per term (R p.adjust method; default BH, the false discovery rate; holm controls the family-wise error rate as ANCOM-BC2's own default does)")
     da.add_argument("-t", "--threads", type=int, default=1)
     da.add_argument("-o", "--outdir", default="da")
     da.add_argument("--rscript", help="Rscript of the R environment (default: $UNCLASSIFIED_META_RSCRIPT, then PATH)")
@@ -275,11 +303,41 @@ def build_parser() -> argparse.ArgumentParser:
                     help="use count tables that were not made by panel-quant / taxa-table (no manifest); they are "
                          "used as they are, without the completeness and checksum checks")
 
+    ptx = sub.add_parser("panel-taxonomy", help="taxID of each panel feature from the classifier's own taxonomy "
+                                               "(for taxa-table --merge-panel --panel-taxonomy)")
+    ptx.add_argument("--panel", required=True, help="folder made by panel-build")
+    ptx.add_argument("--write-fasta", metavar="OUT.fa", help="write the panel's target sequences (step 1), then "
+                                                            "classify them with the index used for the reads")
+    ptx.add_argument("--classified", help="per-read classifier output of those sequences (step 3)")
+    ptx.add_argument("--nodes", help="nodes.dmp of the index taxonomy")
+    ptx.add_argument("--names", help="names.dmp of the index taxonomy")
+    ptx.add_argument("--min-score", type=int, default=0)
+    ptx.add_argument("--min-hitlen", type=int, default=0)
+    ptx.add_argument("--min-support", type=float, default=0.8,
+                     help="share of a feature's classified length its taxon must hold (default 0.8)")
+    ptx.add_argument("--min-classified", type=float, default=0.5,
+                     help="share of a feature's length that must be classified at all (default 0.5)")
+    ptx.add_argument("-o", "--outdir", default="panel_taxonomy")
+
     sr = sub.add_parser("seal-refs", help="adopt a reference folder prepared by hand or copied from another "
                                           "machine: check its files and write the manifests that `run` requires")
     sr.add_argument("refs_dir", help="the folder with viral/, rrna/, protein/ (the layout of download-refs)")
     sr.add_argument("--version", dest="versions", action="append", default=[], metavar="NAME=VERSION",
                     help="release of a reference, e.g. refseq_viral=230 (repeatable; unrecorded ones are 'unknown')")
+
+    # robustness extension (docs/DESIGN_robustness.md); the modules own their options
+    from . import robustness, strains, uncertainty
+    se = sub.add_parser("strain-evidence", help="viral contig overlap, operational 97/98/99 %% clusters, chimera flags "
+                                                "and local read-based haplotypes (clusters are not haplotypes)")
+    strains.add_arguments(se)
+    eu = sub.add_parser("em-uncertainty", help="unique vs EM-shared support, read bootstrap and posterior "
+                                               "realizations of a panel-quant table")
+    uncertainty.add_arguments(eu)
+    dr = sub.add_parser("da-robustness", help="ANCOM-BC2, ALDEx2 and LinDA on matched designs: bootstrap, "
+                                              "realization, leave-one-out and filter stability, concordance")
+    robustness.add_arguments_robustness(dr)
+    dres = sub.add_parser("da-resolutions", help="consistency of da-robustness results across clustering resolutions")
+    robustness.add_arguments_resolutions(dres)
     return ap
 
 
@@ -337,9 +395,12 @@ def _dispatch(args, stack) -> int:
                 [] if args.no_host_decoy else _hosts(args.host), None if args.no_rrna_decoy else args.rrna,
                 args.virus, args.refs, args.extra_targets, args.contigs, args.same_identity,
                 not args.no_reference_genomes, not args.no_other_contig_decoy, args.threads,
-                use_run_hosts=not args.no_host_decoy, use_run_rrna=not args.no_rrna_decoy)
+                use_run_hosts=not args.no_host_decoy, use_run_rrna=not args.no_rrna_decoy,
+                strain_clusters=args.strain_clusters, strain_resolution=args.strain_resolution)
             print(open(out / "features.tsv").read())
             print(f"panel: {out}")
+        elif args.cmd in ("panel-quant", "taxa-table") and getattr(args, "seed", 0) < 0:
+            raise SystemExit("--seed must be 0 or a positive whole number; nothing was written")
         elif args.cmd == "panel-quant":
             from . import panel
             samples = _samples(args)
@@ -347,7 +408,7 @@ def _dispatch(args, stack) -> int:
             setup_logging(outdir / "panel-quant.log")
             write_samplesheet(samples, outdir / "samplesheet.used.tsv")
             out = panel.quantify(Path(args.panel), samples, outdir, args.threads, args.max_alignments, args.preset,
-                                 args.reads_scope, args.input_summary)
+                                 args.reads_scope, args.input_summary, args.ambiguous, args.imputations, args.seed)
             print(open(outdir / "ledger.tsv").read())
             print(f"counts: {out}")
         elif args.cmd == "taxa-table":
@@ -361,6 +422,18 @@ def _dispatch(args, stack) -> int:
             if args.merge_panel:
                 mp = Path(args.merge_panel)
                 extra += [mp.parent / "features.tsv", taxa.panel_scope(mp)[1]]
+                if args.panel_taxonomy:
+                    extra.append(Path(args.panel_taxonomy))
+                # the panel's imputation draws are inputs too (a linked folder must not be written over)
+                extra += sorted((mp.parent / "imputations").glob("*.tsv")) if (mp.parent / "imputations").is_dir() else []
+            elif args.panel_taxonomy:
+                raise SystemExit("--panel-taxonomy is used together with --merge-panel")
+            if args.panel_taxonomy and not args.per_read:
+                raise SystemExit("--panel-taxonomy needs --per-read (the taxa table must record the taxonomy it was "
+                                 "made with); nothing was written")
+            if args.panel_taxonomy and taxa.panel_scope(args.merge_panel)[0] != "unclassified":
+                raise SystemExit("--panel-taxonomy needs a panel counted on the unclassified reads (panel-quant on "
+                                 "the unclassified_reads/ of `run`/`extract`); nothing was written")
             outdir = _guard(stack, "taxa-table", args.outdir, _inputs(args, extra=extra))
             setup_logging(outdir / "taxa-table.log")
             drop = [x.strip() for x in args.drop_lineage.split(",") if x.strip()]
@@ -381,9 +454,13 @@ def _dispatch(args, stack) -> int:
                     raise SystemExit("--per-read needs --taxonomy-name (a short name of the index taxonomy, "
                                      "e.g. ncbi_core_nt_2025); it becomes part of the feature IDs")
                 taxa.build_table_from_per_read(reports, outdir, args.nodes, args.names, args.rank, tuple(drop),
-                                               args.namespace, args.min_score, args.min_hitlen, tuple(strict))
+                                               args.namespace, args.min_score, args.min_hitlen, tuple(strict),
+                                               args.assign, args.imputations, args.seed)
             else:
-                if args.min_score or args.min_hitlen or args.nodes or args.names:
+                if args.assign != "lca" or args.imputations:
+                    raise SystemExit("--assign em and --imputations need --per-read: a report has already resolved "
+                                     "each read to one taxon")
+                if args.min_score or args.min_hitlen or ((args.nodes or args.names) and not args.panel_taxonomy):
                     raise SystemExit("--min-score, --min-hitlen, --nodes and --names belong to --per-read; a report "
                                      "already has its thresholds applied (centrifuger-quant --min-score/--min-length)")
                 if not args.report_format:
@@ -394,7 +471,8 @@ def _dispatch(args, stack) -> int:
             print(open(outdir / "ledger.tsv").read())
             print(f"taxa table: {outdir / 'counts.tsv'}")
             if args.merge_panel:
-                out = taxa.merge_with_panel(outdir, args.merge_panel, args.merge_panel_features, outdir / "merged")
+                out = taxa.merge_with_panel(outdir, args.merge_panel, args.merge_panel_features, outdir / "merged",
+                                            args.panel_taxonomy, args.nodes, args.names, tuple(drop) + tuple(strict))
                 print(open(outdir / "merged" / "reconciliation.tsv").read())
                 print(f"merged table for `da`: {out}")
         elif args.cmd == "control-reads":
@@ -426,9 +504,30 @@ def _dispatch(args, stack) -> int:
         elif args.cmd == "da":
             from . import da
             ins = _inputs(args)
+            if getattr(args, "imputations", False):     # the imputation tables are inputs too
+                imp = Path(args.counts).parent / "imputations"
+                ins += sorted(imp.glob("*.tsv")) if imp.is_dir() else []
             ins = [x for x in ins if str(x) != str(args.rscript)] if args.rscript else ins
             _guard(stack, "da", args.outdir, ins)
             da.run_ancombc2(args, ins)
+        elif args.cmd == "panel-taxonomy":
+            from . import panel_taxonomy as ptx
+            if bool(args.write_fasta) == bool(args.classified):
+                raise SystemExit("give --write-fasta OUT.fa (step 1) or --classified FILE with --nodes/--names (step 3)")
+            if args.write_fasta:
+                print(f"target sequences: {ptx.write_fasta(args.panel, args.write_fasta)}")
+            else:
+                if not (args.nodes and args.names):
+                    raise SystemExit("--classified needs --nodes and --names (the taxonomy of the index)")
+                import os
+                panel_files = [Path(r) / f for r, _, fs in os.walk(args.panel, followlinks=True) for f in fs]
+                ins = [*panel_files, Path(args.classified), Path(args.nodes), Path(args.names)]
+                outdir = _guard(stack, "panel-taxonomy", args.outdir, ins)
+                setup_logging(outdir / "panel-taxonomy.log")
+                out = ptx.build(args.panel, args.classified, args.nodes, args.names, outdir, args.min_score,
+                                args.min_hitlen, args.min_support, args.min_classified)
+                print(open(out).read())
+                print(f"panel taxonomy: {out}")
         elif args.cmd == "seal-refs":
             from . import refs
             versions = dict(v.split("=", 1) for v in args.versions if "=" in v)
@@ -442,6 +541,22 @@ def _dispatch(args, stack) -> int:
             _guard(stack, "run", cfg["outdir"], _inputs(args, samples, [cfg.get("references", {})]))
             rep = run(cfg, samples)
             print(f"report: {rep}")
+        # strain-evidence, da-robustness and da-resolutions check and lock their output folder themselves
+        elif args.cmd == "strain-evidence":
+            from . import strains
+            return strains.main(args)
+        elif args.cmd == "em-uncertainty":
+            from . import uncertainty
+            outdir = _guard(stack, "em-uncertainty", args.outdir, _inputs(args))
+            setup_logging(outdir / "em-uncertainty.log")
+            uncertainty.main(args)
+            print(f"em-uncertainty: {outdir}")
+        elif args.cmd == "da-robustness":
+            from . import robustness
+            return robustness.main_robustness(args)
+        elif args.cmd == "da-resolutions":
+            from . import robustness
+            return robustness.main_resolutions(args)
     return 0
 
 

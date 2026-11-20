@@ -45,7 +45,9 @@ The interactive version (`figures/sankey_all_samples.html`) shows the exact numb
 9. [Memory, time and disk](#9-memory-time-and-disk)
 10. [Differential abundance of viruses / selected taxa (panel workflow)](#10-differential-abundance-of-viruses--selected-taxa-panel-workflow)
     (with [repeated measures](#repeated-measures---rand-formula) and
-    [the classifier's taxa in the same table](#adding-the-classifiers-taxa-taxa-table))
+    [the classifier's taxa in the same table](#adding-the-classifiers-taxa-taxa-table),
+    [reads that fit several taxa](#reads-that-fit-several-taxa-em-and-multiple-imputation) and
+    [one organism, one feature](#one-organism-one-feature-panel-taxonomy))
 11. [Checking classifier thresholds with reversed control reads](#11-checking-classifier-thresholds-with-reversed-control-reads)
 12. [Troubleshooting / FAQ](#12-troubleshooting--faq)
 13. [Tools and citations](#13-tools-and-citations)
@@ -590,6 +592,12 @@ classifier's reads. Measured on a synthetic Centrifuger file of 15 million reads
 it for `extract` peaked at 2.7 GB (71 s), `taxa-table --per-read` at 2.0 GB (56 s), i.e. about 130-180 bytes per
 read. Plan roughly 2 GB per 10 million reads.
 
+**`taxa-table --assign em --imputations 10`** (one core, Pronghorn Xeon E5-2683 v4, 2026-11-19): 18 RNA samples
+(74.9 M reads, rank S, with `--merge-panel` and `--panel-taxonomy`) take 27 min and 2.6 GB; before the
+2026-11-19 EM changes the same command took 2 h 44 min. `--assign lca` takes about 5 min; the rest is the EM and
+the imputations. Profile, per-sample numbers, validation and the commands to repeat the benchmark:
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md).
+
 The assembler is the step that needs the most memory. Before assembling, the pipeline estimates the peak
 memory from the number of pooled reads and prints a **WARNING** when the estimate exceeds `--memory` or
 the free memory of the machine, with the subsample size that would fit.
@@ -999,6 +1007,110 @@ What remains to keep in mind:
 - Names in the reports are labels. IDs are `namespace|taxID|rank`; a taxID is only meaningful together with
   the index it came from. There is no translation between NCBI and GTDB names.
 
+### Reads that fit several taxa: EM and multiple imputation
+
+Centrifuger run with `-k` > 1 reports every equally good taxon of a read on its own line, and a panel fragment can
+align equally well to two features. How such a read is counted changes the result:
+
+| treatment | used by | bias |
+|---|---|---|
+| lowest common ancestor | `taxa-table --per-read` default, Centrifuger `-k 1` | the read leaves the rank; closely related taxa lose reads |
+| even split | the read-count column of `centrifuger-quant` | a rare relative gains reads from a common one |
+| not counted | `panel-quant` default (ledger `ambiguous`) | close relatives lose reads |
+| **EM share** | `--assign em` / `--ambiguous em` | each read is shared by the estimated abundance of its candidates |
+
+With `--assign em` (taxa-table) or `--ambiguous em` (panel-quant), reads with the same candidate set are grouped and
+the maximum-likelihood proportions are found by EM, learnt mainly from the reads that fit one candidate. Reads of a
+dropped lineage, above the rank or not in the taxonomy (taxa-table) and decoys (panel-quant) compete as candidates,
+so no read is forced onto a taxon. This is the E-step of `centrifuger-quant`'s abundance EM, applied to read counts
+without genome-length scaling (`centrifuger-quant` 1.2.0 uses its EM for the abundance column only and splits the
+read counts evenly). The tables then hold expected reads, with six decimals; ANCOM-BC2 accepts non-integer counts.
+
+The expected counts are one estimate, and a test on them treats the shares as if they were observed: a taxon with
+0.01 expected reads in every sample counts as present everywhere for ANCOM-BC2's prevalence filter and
+structural-zero check. Use that fit as a quick look; the combined test below is the result to report.
+
+How the expected counts are computed: candidates that share reads form independent groups. A group whose read
+classes are laminar (any two classes disjoint or nested; on real Centrifuger output most groups) has a closed-form
+maximum-likelihood solution, the Dirichlet tree. Any other group is fitted by EM accelerated with SQUAREM until its
+log-likelihood is certified to be within 1e-4 of its maximum. The certificate is the Lagrangian dual of the
+mixture likelihood: for any positive class weights it bounds the maximum from above, so the bound is rigorous. With
+the weights at the current fit it is the tangent-plane bound, and lowering the weights of the few classes that hold
+a tiny-share candidate makes it much tighter. Before 2026-11-19 the EM stopped when the tangent-plane bound reached
+0.5. That bound can stay open for 10^5 iterations after the likelihood has stopped changing: EM grows a small share
+only by the factor gradient / N per iteration, and N is every read of the group. The current fits are therefore
+both faster and closer to the maximum (on OSD18 the log-likelihood of every sample is higher, by 0.2-1.9 nats). The
+estimator itself, the maximum-likelihood share, is unchanged.
+
+`--imputations M` writes M integer tables drawn from the posterior of the assignment (Jeffreys Dirichlet prior,
+0.5 per candidate), so the tables carry both the uncertainty of which candidate a read came from and of the
+proportions themselves. Laminar groups are drawn exactly from their Dirichlet-tree posterior (shared reads carry
+no information on how the candidates below them divide, so e.g. one A-only read among a million A/B reads gives
+B the Beta(0.5, 1.5) posterior share). Groups with crossing classes use a data-augmentation chain (500 sweeps)
+started by sampling-importance-resampling from the exact posterior of their largest-read laminar part, weighted
+by the likelihood of the crossing classes; when those crossing classes hold very many reads the start, and with
+it the draws, are approximate. `fmi` and the per-imputation results show how much the assignment matters. Each sample
+and each side (taxa, panel) has its own random stream. The same `--seed` gives the same tables on every run. The
+chains of all groups and all M imputations run side by side as arrays, and the reads of a class are drawn together
+as one multinomial (read by read for classes of up to 16 reads). The draws follow the same distributions as before
+2026-11-19 but use the random numbers in a different order, so a seed gives different tables than it did then (see
+[docs/BENCHMARK_em.md](docs/BENCHMARK_em.md) for the distribution check). `da --imputations` fits ANCOM-BC2 on every table and
+combines the fits with Rubin's rules and the Barnard-Rubin degrees of freedom, starting from each feature's
+complete-data degrees of freedom in ANCOM-BC2's own t test (`mi_results.tsv`): a difference that depends on how the
+ambiguous reads are assigned gets a larger standard error, and `fmi_<term>` is the share of the variance that
+comes from the assignment (lambda = (1 + 1/M) B / T; Rubin's gamma, which adds a small-df correction, is larger). A
+feature that is not estimable in every fit (filtered, structural zero, failed fit, or a test ANCOM-BC2 could not
+run) gets p = 1 and stays in the multiple-testing adjustment. ANCOM-BC2 cannot test a feature whose linear model
+has no residual degrees of freedom (nonzero in no more samples than the design has columns); it then reports p = 1
+with a nonzero W, which a real two-sided test never gives (p = 1 only at W = 0). The fits that could test such a
+feature are not pooled on their own: they are the imputations that happened to give it enough nonzero samples, and
+pooling them alone makes sparse features look significant. `n_fits_<term>` counts the fits that estimated and tested
+the feature, `n_untestable_<term>` those that could not test it, and `status_<term>` gives the reason: `pooled`,
+`untestable` (no fit could test it), `partly_untestable`, `not_estimated` (no finite estimate in any fit) or
+`incomplete` (missing, or without a finite p, in some fits). Fits with different coefficients, or fewer than two
+fits, are refused.
+The adjustment family is every feature tested in at least one fit; a feature removed by the prevalence filter in
+every fit is not tested, exactly as in a single ANCOM-BC2 run.
+`diff_robust_<term>` needs the combined call and ANCOM-BC2's own `diff_robust` in at least half of the fits.
+
+```bash
+# taxa: Centrifuger -k 5 output, EM shares, 10 imputations
+unclassified-meta taxa-table --reports reports.tsv --per-read --nodes cfr_nr.nodes.dmp --names cfr_nr.names.tsv \
+    --taxonomy-name cfr_nr_2026 --min-score 64 --rank S --drop-lineage Viridiplantae,Metazoa \
+    --assign em --imputations 10 --merge-panel quant/counts.tsv --panel-taxonomy ptx/panel_taxonomy.tsv -o taxa_S
+# panel: same treatment for fragments that tie between features
+unclassified-meta panel-quant --panel panel --input-dir results/unclassified_reads --ambiguous em --imputations 10 -o quant
+# test: the expected table plus every imputation, combined
+unclassified-meta da --counts taxa_S/merged/counts.tsv --features taxa_S/merged/features.tsv --metadata meta.tsv \
+    --group condition --reference-level healthy --formula "condition + plant" --imputations -o da_S
+```
+
+Give both sides the same number of `--imputations` (the seeds may differ). A side counted without EM (LCA, or the
+panel ledger policy) has no assignment uncertainty and contributes its one table to every imputation; a side
+counted with EM but without imputations is refused by the merge. `--p-adjust` defaults to BH (false discovery
+rate), for the expected-count fit and the combined fits alike; ANCOM-BC2's own default, holm, controls the
+family-wise error rate and is stricter. With `--imputations` it accepts holm, BH, BY, bonferroni and none. Ten imputations are enough when the assignment share of the variance is small (`fmi`
+below 0.3); use 20 or more when it is larger.
+
+### One organism, one feature: `panel-taxonomy`
+
+A panel feature holds reads the classifier did not assign; the same organism often also has classified reads in a
+background taxon row. Without a link, `da` tests it twice (e.g. contigs labelled "Cactus virus X-like" at 70 %
+identity and the classified taxon Opuntia potexvirus A). `panel-taxonomy` classifies the panel's own sequences
+with the index used for the reads and gives each feature the deepest taxon that holds at least 80 % of its
+classified sequence length (`--min-support`), when at least half of its length was classified (`--min-classified`).
+`taxa-table --merge-panel --panel-taxonomy` then adds a feature assigned at or below `--rank` to that taxon's row
+(only for a panel counted on the unclassified reads; with all reads counted it is refused):
+the two sides hold disjoint reads, so the row is the organism's total. Features without a taxon at the rank stay
+features; `merged/collapsed.tsv` lists every panel feature with its outcome and reads.
+
+```bash
+unclassified-meta panel-taxonomy --panel panel --write-fasta panel_targets.fa
+centrifuger -x cfr_nr -k 5 -u panel_targets.fa -t 16 > panel_targets.cfr.tsv        # the reads' index and -k
+unclassified-meta panel-taxonomy --panel panel --classified panel_targets.cfr.tsv \
+    --nodes cfr_nr.nodes.dmp --names cfr_nr.names.tsv -o ptx
+```
+
 ### Real-data check (2026-11-18)
 
 The panel workflow was run on the three cactus samples of section 7 (200,000 read pairs each). `panel-build` took
@@ -1010,6 +1122,64 @@ reference genomes themselves, as expected for viruses that are only 80.7 % and 8
 
 The design, the counting rule and how each point of the design review was handled are in
 [`docs/DESIGN_centrifuger_ancombc.md`](docs/DESIGN_centrifuger_ancombc.md).
+
+### Strains, read-assignment uncertainty and robustness of differential abundance
+
+Four commands extend the panel workflow. The design, the rules and the exact output columns are in
+[`docs/DESIGN_robustness.md`](docs/DESIGN_robustness.md); each table also states its own rules in its `#` header lines.
+
+```bash
+# 1. how the viral contigs relate to each other and to their reference genome; local haplotypes from the reads
+unclassified-meta strain-evidence --run run --input-dir reads -o strains          # --identity 97,98,99
+# 2. one panel feature per 98 % cluster (repeat with 97 and 99 for the resolution check)
+unclassified-meta panel-build --run run -o panel98 --strain-clusters strains/viral_strain_clusters.tsv \
+    --strain-resolution 98
+unclassified-meta panel-quant --panel panel98 --input-dir reads --ambiguous em -o quant98
+# 3. unique vs shared read support, read bootstrap (100) and posterior realizations (20) of the EM counts
+unclassified-meta em-uncertainty --quant quant98 -o unc98 -t 8
+# 4. ANCOM-BC2, ALDEx2 and LinDA on the same samples, formula and features, refitted on bootstrap and realization
+#    tables, without each sample (or each --unit, e.g. plant) and at other prevalence cuts
+unclassified-meta da-robustness --em-uncertainty unc98 --features quant98/features.tsv --metadata meta.tsv \
+    --group condition --formula 'condition + plant' --unit plant -t 12 -o da98
+unclassified-meta da-resolutions --run 97=da97 --run 98=da98 --run 99=da99 -o resolutions
+```
+
+**What the words mean.** A 97/98/99 % cluster is an *operational sequence cluster*: contigs that look alike, not
+a proven strain. `strain-evidence` upgrades a cluster only with evidence, and names that evidence in the table:
+*candidate strain-like lineage* (it differs from another cluster inside a region both cover, not merely by covering
+another part of the genome, and no member looks chimeric), *phased viral haplotype* (read pairs carry at least
+two of its distinguishing variants together in one local block), *reference-supported viral strain* (its
+consensus matches a reference genome at ≥ 99 % over ≥ 80 % of it). With PE150 reads a block spans at most the
+fragment length (`phasing_limits.tsv` gives read length, insert size, depth and the longest phasable span), so
+haplotypes are **local**: no genome-wide haplotype is claimed from separate blocks.
+
+**Five count matrices stay separate**: fragments counted for one feature only (`unique_counts.tsv`, as observed),
+EM expected fragments, bootstrap realizations, normalized abundance (per million input fragments) and abundance
+summed per parent feature or taxon. A feature whose abundance comes mostly from shared fragments is marked
+`em_driven` and its `assignment_confidence` is low.
+
+**What the bootstrap measures.** Fragments (read pairs, so mates stay together) are resampled within each sample
+and the EM is refitted. This measures read sampling and read-assignment instability. It is **not** biological
+replication: bootstrap tables, realizations and technical replicates are never counted as replicates, and their
+p-values are never pooled. (`da --imputations` pools ANCOM-BC2 fits of posterior imputations with Rubin's rules;
+that is the one justified combination.) ALDEx2's own Monte-Carlo instances model the counting noise of a given
+table, not which feature an ambiguous read belongs to; that uncertainty enters only through the realization and
+bootstrap tables.
+
+**Reading the result.** `robustness_summary.tsv` keeps four dimensions in separate columns: sequence-assignment
+confidence, abundance-estimation stability, differential-abundance support and cross-method agreement, plus
+replicate consistency and (with `--resolution-table`) clustering-resolution stability. `conclusion` is
+`high_confidence` only when the printed rule holds (significant in ≥ 2 methods in one direction, stable under
+bootstrap and realizations, assignment not low, abundance not unstable, no single sample or unit drives it);
+everything else significant is `exploratory`. A result significant in all three methods can still be exploratory.
+Write *"robust across three complementary differential abundance frameworks"*, not *"validated by three
+independent statistical methods"*: the methods analyse the same reads. With about three replicates per group,
+read `replicate_sensitivity.tsv` (leave-one-out, single-sample share, minimal detectable effect) and treat a
+non-significant feature as *not detected*, not as *no effect*.
+
+**R packages.** `da-robustness` needs ALDEx2 and MicrobiomeStat (LinDA) in the R environment
+(`environment-r.yml`; for an existing environment:
+`micromamba install -p <env> -c conda-forge -c bioconda bioconductor-aldex2=1.42.0 r-microbiomestat=1.4`).
 
 ---
 
@@ -1145,3 +1315,10 @@ Ideas for the reversed-read control, score thresholds for Centrifuger output, si
 random-effect support were contributed by Eli Holschbach.
 
 License: MIT. Contact: Won Yim (wyim@unr.edu).
+
+## Development notes
+
+For contributors and coding agents: the current state, intent and open items of ongoing work are in
+[`resume.md`](resume.md), [`INTENTION.md`](INTENTION.md), [`TODO.md`](TODO.md), [`ISSUE.md`](ISSUE.md),
+[`QUARANTINE.md`](QUARANTINE.md) (approaches already tried and rejected) and [`AGENTS.md`](AGENTS.md)
+(working rules).

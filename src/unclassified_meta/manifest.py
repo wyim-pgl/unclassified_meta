@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -59,6 +60,39 @@ def is_generated(folder: str | Path) -> bool:
     """A folder written by this program (it has a producer marker or a manifest)."""
     folder = Path(folder)
     return (folder / MARKER).exists() or (folder / NAME).exists() or (folder / "provenance.json").exists()
+
+
+def previous_artifacts(folder: str | Path, name: str = NAME) -> dict:
+    """{file: sha256} of the folder's current manifest (read before a producer starts a new generation), so that
+    stale outputs of the previous generation can be removed without touching files this program never wrote."""
+    try:
+        arts = json.loads((Path(folder) / name).read_text()).get("artifacts") or {}
+        return {str(k): str(v) for k, v in arts.items()} if isinstance(arts, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+STALE_NAME = re.compile(r"(imputations/(counts|ledger|ancombc2_results)_\d{3,}\.tsv|collapsed\.tsv|mi_results\.tsv"
+                        # em-uncertainty realizations, da-robustness per-fit tables, strain-evidence figures
+                        r"|(bootstrap|realizations)/counts_\d{3,}\.tsv|fits/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.(tsv|txt)"
+                        r"|figures/[A-Za-z0-9_.-]+\.(png|pdf))")
+
+
+def remove_stale(folder: str | Path, previous: dict, keep) -> None:
+    """Delete outputs the previous generation sealed (imputation tables, collapsed.tsv) that this one does not write
+    again: only names this program writes, only regular files inside the folder (never through a link), and only
+    when the file is still exactly the sealed one (a file replaced since is somebody else's and stays)."""
+    folder = Path(folder)
+    base = folder.resolve()
+    for rel in sorted(set(previous) - set(keep)):
+        if not STALE_NAME.fullmatch(rel):
+            continue
+        parts = Path(rel).parts
+        f = folder / rel
+        if f.is_symlink() or any((folder / Path(*parts[:i])).is_symlink() for i in range(1, len(parts))):
+            continue
+        if f.is_file() and base in f.resolve().parents and sha256(f) == previous[rel]:
+            f.unlink()
 
 
 def seal(folder: str | Path, files, record: dict | None = None, name: str = NAME) -> dict:

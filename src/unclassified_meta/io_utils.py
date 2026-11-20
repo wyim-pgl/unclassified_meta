@@ -180,6 +180,14 @@ class folder_lock:
         return False
 
 
+def current_umask() -> int:
+    """The process umask (read by setting and restoring it; there is no read-only call)."""
+    import os
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
+
 class staged:
     """Context manager: write to a UNIQUE temporary file in the destination folder (created exclusively, so two
     writers never share one), then os.replace it into place. On an error, or when the rename itself fails, only
@@ -197,7 +205,11 @@ class staged:
         name = self.dst.name
         suffix = ".part.gz" if name.endswith(".gz") else ".part"
         fd, path = tempfile.mkstemp(prefix=f".{name}.", suffix=suffix, dir=self.dst.parent)
-        os.close(fd)
+        try:
+            # mkstemp creates 0600; give the output the mode any other new file would get under the umask
+            os.fchmod(fd, 0o666 & ~current_umask())
+        finally:
+            os.close(fd)
         self.tmp = Path(path)
         return self.tmp
 
