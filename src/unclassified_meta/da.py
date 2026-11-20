@@ -102,21 +102,53 @@ def read_results(path) -> "pd.DataFrame":
     return pd.read_csv(path, sep="\t", skiprows=skip, quoting=3)        # the R script writes unquoted fields
 
 
+# |W| at or below this is a zero statistic: a two-sided t test then has p = 1 legitimately. Above it a valid test has
+# p < 1 (|W| = 1e-12 gives p = 1 - 8e-13, which R writes as < 1), so p = 1 there is ANCOM-BC2's fill for no test.
+_ZERO_W = 1e-12
+MI_STATUS = ("pooled", "untestable", "partly_untestable", "not_estimated", "incomplete")
+
+
+def _untestable(p, w, lfc, se):
+    """ANCOM-BC2 fits it could not test: p_hat = 2 pt(|W|, dof) is NaN when the feature's residual df is 0 (lm
+    saturated: the feature is nonzero in no more samples than the design has columns) and ancombc2 then sets
+    p_hat[is.na(p_hat)] = 1. A real two-sided test has p = 1 only at W = 0, so p >= 1 with a nonzero (or missing)
+    W marks the fill. W = lfc / se in ANCOM-BC2; it is used where the W column is missing."""
+    import numpy as np
+    w = np.where(np.isfinite(w), w, lfc / np.where(se > 0, se, np.nan))
+    return (p >= 1) & ~(np.abs(w) <= _ZERO_W)
+
+
 def combine_imputations(results: list, alpha: float, method: str):
     """Rubin's rules over the ANCOM-BC2 result tables of the imputations, term by term (intercept left out).
 
-    Every feature of any fit is reported. A feature without a finite estimate in every fit (filtered by prevalence,
-    a structural zero or a failed fit in some imputation), or one that ANCOM-BC2 could not test in some fit (p = 1
-    with a nonzero W, which ANCOM-BC2 reports when the feature's degrees of freedom are NA), is not pooled: its p is
-    set to 1 and it stays in the multiple-testing adjustment, as ANCOM-BC2 does for a failed test. The
-    complete-data degrees of freedom of each feature are recovered from the fits' own t tests (W and p), so
-    identical imputations reproduce ANCOM-BC2's test. diff_robust: diff, and ANCOM-BC2's own diff_robust
-    (significant and stable under its pseudo-count sensitivity analysis) in at least half of the fits.
+    Every feature of any fit is reported. A fit counts for a feature only when its estimate, its standard error
+    (finite, > 0) and its p are finite and ANCOM-BC2 could test it (see _untestable). A feature is pooled only when
+    every fit counts; otherwise its p is set to 1 and it stays in the multiple-testing adjustment, as ANCOM-BC2 does
+    for a failed test. Pooling only the fits that could test a feature would condition on the imputations that
+    happened to give it enough nonzero samples, so it is not done. status_<term> says why a feature was not pooled:
+    untestable (no fit could test it), partly_untestable (some could), not_estimated (no finite estimate in any fit:
+    filtered by prevalence or a failed fit), incomplete (missing, or without a finite p, in some fits).
+
+    The complete-data degrees of freedom of each feature are recovered from the counted fits' own t tests (W and p)
+    and their median is used, so identical imputations reproduce ANCOM-BC2's test; when no fit gives one (all W = 0,
+    where p = 1 anyway, or all p underflowed to 0) the reference is normal. fmi_<term> is lambda = (1 + 1/M) B / T,
+    the share of the total variance due to the read assignment (Rubin's gamma adds a small-df correction and is
+    larger). diff_robust: diff, and ANCOM-BC2's own diff_robust (significant and stable under its pseudo-count
+    sensitivity analysis) in at least half of the fits.
     """
     import numpy as np
     import pandas as pd
     from . import em
+    if len(results) < 2:
+        raise StepError(f"combining imputations needs at least 2 fits, got {len(results)}")
     base = results[0]
+    need = {c for c in base.columns if c.split("_", 1)[0] in ("lfc", "se", "W", "p") and "(Intercept)" not in c}
+    for m, r in enumerate(results[1:], 2):
+        missing = sorted(need - set(r.columns))
+        extra = sorted(c for c in r.columns if c.startswith("lfc_") and c not in base.columns)
+        if missing or extra:
+            raise StepError(f"imputation fit {m} does not have the coefficients of fit 1 "
+                            f"(missing {', '.join(missing) or '-'}; extra {', '.join(extra) or '-'})")
     ids = list(dict.fromkeys(f for r in results for f in r["feature_id"]))
     rs = [r.drop_duplicates("feature_id").set_index("feature_id").reindex(ids) for r in results]
     meta_cols = [c for c in ("label", "identity_class") if c in base.columns]
@@ -127,30 +159,39 @@ def combine_imputations(results: list, alpha: float, method: str):
     terms = [c[4:] for c in base.columns if c.startswith("lfc_") and c != "lfc_(Intercept)"]
     true_frac = lambda col: np.column_stack([r[col].astype(str).str.upper().eq("TRUE").to_numpy() for r in rs]
                                             ).mean(axis=1) if col in base.columns else np.full(len(ids), np.nan)
+    col = lambda name: np.column_stack([r[name].to_numpy(dtype=float) for r in rs])
     for t in terms:
-        est = np.column_stack([r[f"lfc_{t}"].to_numpy(dtype=float) for r in rs])
-        se = np.column_stack([r[f"se_{t}"].to_numpy(dtype=float) for r in rs])
-        fin = np.isfinite(est) & np.isfinite(se) & (se > 0)
+        if f"se_{t}" not in base.columns:
+            raise StepError(f"the imputation fits give lfc_{t} without se_{t}")
+        est, se = col(f"lfc_{t}"), col(f"se_{t}")
+        estimated = np.isfinite(est) & np.isfinite(se) & (se > 0)
+        untestable = np.zeros_like(estimated)
+        fin = estimated.copy()
         if f"p_{t}" in base.columns:              # a fit whose own test failed is not a successful fit
-            pf = np.column_stack([r[f"p_{t}"].to_numpy(dtype=float) for r in rs])
-            fin &= np.isfinite(pf)
-            if f"W_{t}" in base.columns:          # ANCOM-BC2 gives p = 1 when the feature's df is NA; W = 0 is a test
-                wf = np.column_stack([r[f"W_{t}"].to_numpy(dtype=float) for r in rs])
-                fin &= ~((pf >= 1) & np.isfinite(wf) & (wf != 0))
+            pf = col(f"p_{t}")
+            wf = col(f"W_{t}") if f"W_{t}" in base.columns else np.full_like(pf, np.nan)
+            untestable = estimated & np.isfinite(pf) & _untestable(pf, wf, est, se)
+            fin &= np.isfinite(pf) & ~untestable
         n_fits = fin.sum(axis=1)
+        m = len(rs)
+        n_est, n_unt = estimated.sum(axis=1), untestable.sum(axis=1)
+        status = np.select([n_fits == m, n_est == 0, (n_unt > 0) & (n_unt == n_est), n_unt > 0],
+                           ["pooled", "not_estimated", "untestable", "partly_untestable"], "incomplete")
         est = np.where(fin, est, np.nan)
         dfc = np.full(len(ids), np.inf)
         if f"W_{t}" in base.columns and f"p_{t}" in base.columns:
-            for i in range(len(ids)):
-                d = [em.df_from_p(float(r[f"W_{t}"].iloc[i]), float(r[f"p_{t}"].iloc[i])) for r in rs]
+            for i in np.flatnonzero(n_fits == m):     # only pooled features need one, from the counted fits only
+                d = [em.df_from_p(float(wf[i, j]), float(pf[i, j])) for j in range(m) if fin[i, j]]
                 d = [x for x in d if not np.isnan(x)]
                 dfc[i] = float(np.median(d)) if d else np.inf
         c = em.rubin(est, se, dfc)
-        pv = np.where(np.isfinite(c["p"]), c["p"], 1.0)
+        pv = np.where((n_fits == m) & np.isfinite(c["p"]), c["p"], 1.0)
         q = p_adjust(pv, method)
         out[f"lfc_{t}"], out[f"se_{t}"], out[f"df_{t}"] = c["estimate"], c["se"], c["df"]
         out[f"fmi_{t}"], out[f"p_{t}"], out[f"q_{t}"] = c["fmi_between"], pv, q
         out[f"n_fits_{t}"] = n_fits
+        out[f"n_untestable_{t}"] = n_unt
+        out[f"status_{t}"] = status
         out[f"diff_{t}"] = (q < alpha) & (n_fits == len(rs))
         out[f"diff_frac_{t}"] = true_frac(f"diff_{t}")
         out[f"robust_frac_{t}"] = true_frac(f"diff_robust_{t}")
@@ -211,9 +252,10 @@ def _fit_imputations(args, cmd: list, cp: dict, imp_files: list, stage: Path, ou
         fo.write(f"# ANCOM-BC2 on {n} imputations of the ambiguous reads, combined with Rubin's rules "
                  f"(T = W + (1 + 1/M) B; t reference with Barnard-Rubin df from each feature's complete-data df); "
                  f"p adjusted with {args.p_adjust} per term, with p = 1 for a feature not estimated and tested in "
-                 "every fit; "
-                 "fmi = share of the variance due to the read assignment; diff_robust: diff and ANCOM-BC2's "
-                 "diff_robust in at least half of the fits\n")
+                 "every fit (status: pooled, untestable = ANCOM-BC2 p = 1 with W != 0 in every fit, "
+                 "partly_untestable, not_estimated, incomplete); "
+                 "fmi = lambda = (1 + 1/M) B / T, the share of the variance due to the read assignment; "
+                 "diff_robust: diff and ANCOM-BC2's diff_robust in at least half of the fits\n")
         combined.to_csv(fo, sep="\t", index=False)
     for t in terms:
         log.info("da --imputations: %s: %d of %d features differ (q < %s), %d robust", t,

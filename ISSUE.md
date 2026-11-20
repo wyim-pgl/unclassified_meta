@@ -24,6 +24,7 @@ _최종 갱신: 2026-11-19. 작업 항목은 [TODO.md](TODO.md)._
 5. **main 병합 여부** — 사용자 결정 대기. `em-imputation`은 `p257-fixes` 위에 있음.
 
 ## Resolved
+- 2026-11-19: **MI 결합 감사(audit)** — 537f358의 판정은 W가 NA이거나 W 열이 없으면 p=1(검정 불가) fit을 유효로 보고 다시 검정해 유의하게 만들었다(합성 예: p 2e-9). 해결: W가 없으면 lfc/se로 판단, |W| ≤ 1e-12만 진짜 p=1, df는 집계된 fit에서만 복원, fit 2개 미만·계수 열 불일치는 거부, `status_`/`n_untestable_` 열 추가. 저장된 OSD18 RNA 속 fit 재결합은 기준(`repool_fix/mi_results_G.tsv`)과 4e-16 이내로 같음. 기준의 q는 **Holm**이다(BH 아님; BH면 q<0.05 5개). `fmi`는 λ다. 상세 `docs/MI_POOLING_AUDIT.md`, 테스트 `tests/test_mi_pooling.py`.
 - 2026-11-19: ccloop 런 `unclassified-meta-p257-20261118`(round 4에서 blocked)을 사용자 지시로 종료(`stop`, phase stopped). P257 목표는 이 worktree에서 수동으로 이어 진행됨. 기록 `~/.local/state/ccloop/unclassified-meta-p257-20261118/ccloop.md`.
 - 2026-11-19: **MI 결합이 ANCOM-BC2의 p=1(검정 불가)을 무시함** — ANCOM-BC2는 특징의 dof가 NA면 W가 커도 p=1을 준다(`.ancombc2_core`: `p_hat[is.na(p_hat)] = 1`). `combine_imputations`는 df를 복원하지 못하면 ∞로 두고 p를 다시 계산해, 각 fit에서 검정 불가였던 특징이 유의해졌다(OSD18 RNA 속 수준 q<0.05 70개; Aedoeadaptatus는 모든 fit p=1인데 MI q 9e-57). 해결: p ≥ 1이고 W가 0이 아닌 유한값인 fit은 실패로 처리(`da.py` `combine_imputations`), 회귀 테스트 `test_a_fit_ancombc2_could_not_test_stays_untested_after_pooling`. 재결합 결과 q<0.05 70 → 2(Tobamovirus robust, Ophiobolus).
 - 2026-11-19: EM 실데이터 비수렴(샘플 20, 10만 반복) — 원인: 수치 잡음 step, 평평한 방향, `dominated()` 반복 호출. 해결: 성분별 닫힌 해(Dirichlet tree), 지배 후보 제거, 인증된 likelihood gap(0.5 nat) 정지, projected SQUAREM. 샘플 20: 95초 수렴.
