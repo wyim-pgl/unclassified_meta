@@ -1,6 +1,6 @@
 # QUARANTINE — 폐기된 가정·접근 (재사용 금지)
 
-_최종 갱신: 2026-11-19. 현재 정본은 [resume.md](resume.md)와 `src/unclassified_meta/em.py`._
+_최종 갱신: 2026-11-23. 현재 정본은 [resume.md](resume.md)와 `src/unclassified_meta/em.py`._
 
 | 날짜 | 폐기된 것 | 이유 | 현재 근거 |
 |---|---|---|---|
@@ -15,3 +15,9 @@ _최종 갱신: 2026-11-19. 현재 정본은 [resume.md](resume.md)와 `src/uncl
 | 2026-11-19 | panel_id 앞 12자 FASTA 태그 | 다른 패널 세대가 통과 가능(Codex r4) | 전체 panel_id 태그 |
 | 2026-11-19 | "potexvirus-like 4개(CVX/PitVX/ZyVX/SchVX)는 서로 다른 바이러스" | 특징 간 염기 동일성 92–98 %, 샘플 간 상관 0.88–0.99 → 같은 종의 조각·변이체 | RNA/potex_check (Pronghorn OSD18), panel-taxonomy → Opuntia potexvirus A |
 | 2026-11-19 | centrifuger 단일 입력 `-U` | 옵션은 `-u` | stageA.sbatch, README |
+| 2026-11-20 | EM 기대값 0.5 리드 미만을 구조적 0 판정에서 "없음"으로 보기(구조적 0 문턱) | 사용자 요구: EM 값을 바꾸거나 임의 문턱을 두지 않는다 | ANCOM-BC2 규칙 그대로 + `detection` 근거표 (INTENTION.md) |
+| 2026-11-20 | "imputation이 모두 같으면 MI는 완전데이터 t 검정을 재현한다"(df = ν_com) | 사용자 결정으로 Barnard–Rubin 공식을 FMI = 0에도 적용(ν_com(ν_com+1)/(ν_com+3)) | `em.rubin`, `4319f64`, tests/test_mi_pooling.py |
+| 2026-11-20 | LCA의 구조적 0 = 그 조건에 생물이 없음 | T. cacti macho 기대 리드 0.35(검출 한계 안), CYVaV는 같은 umbra-like 무리가 P257 healthy에 있음 | docs/reports/osd18_structural_zero/REPORT.md |
+| 2026-11-20 | OSD18 첫 배치의 `da_*_em/mi_results.tsv`(round-10 코드) | MI 결합 버그(p=1 fit 재검정) 이전 결과: RNA 종 q<0.05 242개 | `OSD18/<T>/repool_fix/`, v2 `da_*_em_sz/` |
+| 2026-11-20 | OSD18 첫 배치 LCA 표(`taxa_*_lca`, `--panel-taxonomy` 없음)로 EM과 비교 | EM 표와 패널 collapse 조건이 달라 비교에 섞임 | `taxa_*_lca_ptx`, v2 결과 |
+| 2026-11-20 | "새 EM 코드(main 속도 개선)는 이전 EM과 같은 표를 낸다" | OSD18에서 칸당 최대 1.65 리드 차이 관측 | ISSUE 3b |

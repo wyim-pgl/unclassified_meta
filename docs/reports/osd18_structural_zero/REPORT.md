@@ -67,3 +67,27 @@
   `unique_counts.tsv`, `detection` 명령)은 진행 중이다.
 - RNA 종 수준 MI(6272794)를 고친 코드로 재결합하고, 구조적 0이 imputation마다 갈리는 특징이 MI에서 p = 1로 남는지 확인한다.
 - 같은 생물이 여러 행으로 나뉘는 문제(umbra-like 바이러스, tobamovirus 무리)는 ISSUE 2d에서 다룬다.
+
+## v2 실행 결과 (코드 ace3467, 2026-11-20)
+
+같은 조건(`--struc-zero`, `neg_lb = FALSE`, BH, formula `condition + plant`)으로 LCA(`taxa_*_lca_ptx`, `--panel-taxonomy`
+병합), EM 기대값, MI(10 imputation, Barnard–Rubin df)를 다시 돌렸다. 출력 `OSD18/<T>/da_<R>_{lca,em}_sz`, `detection_<R>`.
+
+| | LCA 검정 / q<0.05 / robust | EM 기대값 | MI | MI∩LCA (q<0.05) | MI만 | EM 기대값만 |
+|---|---|---|---|---|---|---|
+| RNA 종 | 6,786 / 16 / 8 | 9,930 / 21 / 11 | 13,138 / 3 / 3 | 3 | 0 | 7 |
+| RNA 속 | 2,465 / 15 / 8 | 2,678 / 11 / 6 | 3,077 / 2 / 2 | 2 | 0 | 1 |
+| DNA 종 | 10,094 / 973 / 459 | 11,633 / 1,182 / 621 | 12,573 / 486 / 287 | 475 | 11 | 374 |
+| DNA 속 | 2,756 / 643 / 433 | 2,804 / 649 / 447 | 2,888 / 508 / 394 | 508 | 0 | 36 |
+
+- RNA 종에서 EM 기대값 fit에만 유의한 7개는 Tobamovirus cacti, Citrus yellow vein-associated virus, Fig umbra-like
+  virus, Sclerotinia nivalis, Alternaria incomplexa, Bottle gourd mottle virus, Watermelon green mottle mosaic virus로,
+  모두 공유 리드 배정에 기대는 특징이다. MI에서는 하나도 유의하지 않다. T. cacti는 10개 fit 중 8개, CYVaV는 3개에서
+  구조적 0이라 MI 상태 `incomplete`, p = 1, 결합 LFC 없음(`mi_structural_zeros.tsv`에 비율 기록).
+- RNA 종 MI 유의 3개: Tobamovirus muricaudae(LFC −7.98, q 4.5 × 10⁻⁸), cyanobacterium TDX16(2.69, q 0.0018),
+  Ampelomyces quisqualis(4.51, q 0.032). 셋 다 robust이고 LCA에서도 유의하다.
+- MI 상태(RNA 종): pooled 3,238, untestable 5,641, partly_untestable 2,210, not_estimated 1,492, incomplete 557.
+  결합된 특징의 fmi 중앙값 0.34, df 중앙값 1.04(DNA 속 0.026, 5.58).
+- `detection`(RNA 종): 한 조건은 고유 리드 지지, 다른 조건은 공유 리드 배정만 있는 특징 2,382개.
+- DNA의 LCA q<0.05가 이전 61개에서 973개로 늘어난 것은 BH 기본값(이전 holm), 구조적 0 특징의 검정 제외,
+  `--panel-taxonomy` 재병합이 함께 바뀐 결과다.
