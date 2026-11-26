@@ -8,7 +8,10 @@
 - Authorship: Won Yim <wyim@unr.edu> only; no AI co-author trailers. Commit or push only when the user asks.
 - The editable install in the `unclassified_meta` micromamba env points at the main checkout `/mnt/f/scratch/develop/unclassified_meta`. To test this worktree run with `PYTHONPATH=src`, `PATH=<env>/bin:$PATH` and `UNCLASSIFIED_META_RSCRIPT=<unclassified_meta_r env>/bin/Rscript`; otherwise tests skip or test the wrong code.
 - Every producer seals its outputs (`MANIFEST.json` / `provenance.json`) last; every consumer verifies before reading. Keep that pattern for new outputs; remove stale files only through `manifest.remove_stale`.
-- Defaults must stay backward compatible: `--assign lca`, `--ambiguous ledger`.
+- Defaults must stay backward compatible: `--assign lca`, `--ambiguous ledger`. `--p-adjust` defaults to BH in `da`, `da-robustness` and the R scripts; keep them equal.
+- Cross-method wording: "Robust across three complementary differential abundance frameworks", never "validated by three independent methods". Design: `docs/DESIGN_robustness.md`.
+- The R environment needs ANCOMBC, ALDEx2 1.42.0 and MicrobiomeStat 1.4 (`environment-r.yml`); for install problems read the lab wiki first.
+- Eli's input files on Pronghorn move: the Ococh host genome is now `/data/gpfs/assoc/pgl/Eli/OSD/input/Ococh_noHighGC.fa` (was `.../kraken2/input/Ococh_genome/`). Pass `--host ococh=<path>` to `panel-build`; it checks the sha256 the run recorded.
 - Centrifuger single-end input is `-u` (lowercase). On Pronghorn cancel jobs by ID (`scancel -n a,b` with a comma list cancels nothing).
 - Slurm: partitions `cpu-s1-pgl-0` or `cpu-s2-core-0`; 13-day limit; never `cpu-s3-sponsored-0`.
 - Test command (from the worktree root): `E=/home/wyim/micromamba/envs; PYTHONPATH=src PATH=$E/unclassified_meta/bin:$PATH UNCLASSIFIED_META_RSCRIPT=$E/unclassified_meta_r/bin/Rscript python -m pytest -q -p no:warnings tests` (about 35-40 min; run in the background).

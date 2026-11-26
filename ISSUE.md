@@ -1,12 +1,12 @@
 # ISSUE — em-imputation
 
-_최종 갱신: 2026-11-23. 작업 항목은 [TODO.md](TODO.md). 현재 상태는 [resume.md](resume.md)._
+_최종 갱신: 2026-11-25. 작업 항목은 [TODO.md](TODO.md). 현재 상태는 [resume.md](resume.md)._
 
 ## Blocker
 - 없음.
 
 ## In Progress
-- 없음(2026-11-23 확인: 이 프로젝트의 실행 중 잡·에이전트 없음).
+1. **OSD18 robustness 확장 실행(TODO 4)** — 코드 `unclassified_meta_test/em_code_v3/` = `734c77e`. strain-evidence RNA 6328728·DNA 6328733 완료. 97/98/99 % 단계 첫 제출(6328729–31, 6328734–36)은 host genome 경로가 바뀌어 실패(Resolved 참고) → 2026-11-25 재제출: RNA 6331075–77 → final 6331078, DNA 6331079–81 → final 6331082(afterok). 로그 `OSD18/logs/rob_<T>_<P>_<id>.log`. 확인할 것: Tobamovirus·Ophiobolus가 `high_confidence`로 남는지.
 
 ## To Go
 2d. **unclassified assembly 패널과 classified 배경의 중복·분할 점검** — 질문: unclassified 리드로 만든 패널 contig에 이미 분류된 생물이 들어가 리드 카운트가 틀어지는가.
@@ -20,10 +20,12 @@ _최종 갱신: 2026-11-23. 작업 항목은 [TODO.md](TODO.md). 현재 상태�
 4. **round-11 수정분 미검토** — Codex round 11은 "READY AFTER FIXES", 그 수정(링크된 imputations 폴더 거부, dropped_lineages 기록, round_preserving, 정수 추출)은 재검토 안 받음.
 
 ## Waiting
-5. **main 병합·푸시 여부** — 사용자 결정 대기. `em-imputation`(`ace3467`)은 main(`a547229`)을 포함하고 `4319f64`·`e27d383`·`ace3467`이 더 있다. 둘 다 원격보다 앞서 있음(푸시 안 함).
+7. **MaAsLin 3 추가 여부와 prevalence "있음" 기준** — 2026-11-20 제안, 사용자 답 없음. 걸리는 점: EM 분수 배정이 prevalence를 부풀림, 식물 3개 설계에서 logistic 성분 검정력 거의 없음, 효과 척도가 다름. 상세 INTENTION.md.
 6. **시뮬레이션 `runs/` 23 GB 보존 여부** — 잡 임시폴더에만 있어 잡 정리 시 사라짐. 요약·스크립트·결과표는 `docs/reports/simulation_em_mi_20261119/`에 보존됨.
 
 ## Resolved
+- 2026-11-25: **robustness 97/98/99 % 잡이 2–12초 만에 실패** — `panel-build`가 run에 기록된 host genome `/data/gpfs/assoc/pgl/Eli/OSD/kraken2/input/Ococh_genome/Ococh_noHighGC.fa`를 못 찾음. Eli가 `Eli/OSD/input/Ococh_noHighGC.fa`로 옮겼고 sha256(e8524c48…)은 기록과 같음. `rob_res.sbatch`에 `--host ococh=<새 경로>` 추가 후 재제출(In Progress 1). 원본 스크립트 `OSD18/logs/rob_res.sbatch.bak_20261125`.
+- 2026-11-25: **main 병합·푸시(구 Waiting 5)** — `origin/main` = `734c77e`(`ace3467` 포함). 전체 테스트 366 passed(`7c6ae6d`, 2026-11-24, 29분).
 - 2026-11-20: **OSD18 실데이터 실행(구 In Progress #1)** — v2 실행 완료(resume.md, REPORT.md 'v2 실행 결과'). 이전 배치와 고친 코드 재결합 결과는 `OSD18/<T>/repool_fix/`.
 - 2026-11-20: **EM 분수 배정이 완전 분리를 깸(구 2b)** — 안전장치 적용 결과: RNA 종에서 EM 기대값에만 유의한 7개가 MI에서 모두 유의하지 않음; T. cacti는 imputation 8/10, CYVaV 3/10에서 구조적 0 → MI `incomplete`, p = 1.
 - 2026-11-20: **EM의 한 종 집중(구 2c)** — Sclerotinia nivalis는 EM 기대값에서만 유의, MI에서 유의하지 않음.

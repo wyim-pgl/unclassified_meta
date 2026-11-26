@@ -1,6 +1,6 @@
 # INTENTION — unclassified_meta (em-imputation 작업)
 
-_최종 갱신: 2026-11-23_
+_최종 갱신: 2026-11-25_
 
 ## 왜 이 작업을 하는가
 - Centrifuger로 분류하면 unknown(미분류) 리드가 너무 많고, 데이터베이스를 키우자니 메모리가 부족하다. 그래서 미분류 리드가 무엇인지 설명하려고 이 레포(unclassified_meta)를 만들었다.
@@ -16,8 +16,14 @@ _최종 갱신: 2026-11-23_
 - 차등 분석 엔진은 ANCOM-BC2 유지(조성 편향 보정, plant 공변량·랜덤효과, Eli OSD 분석과 연속성).
 - 저자: Won Yim <wyim@unr.edu>, AI trailer 없음. 커밋·푸시는 사용자 요청 시에만.
 
+## 추가 요구(2026-11-19, 사용자 제공 명세 "Additional Mandatory Requirements")
+- 서열 클러스터링(97/98/99 %)과 haplotype 재구성을 분리하고, PE150의 phasing 한계를 정직하게 보고한다(`strain-evidence`).
+- EM 배정 불확실성을 전파한다: raw unique / EM 기대값 / bootstrap / 정규화 / 분류군 합산 행렬을 따로 두고, pair를 유지한 read bootstrap(진단 100, 최종 ≥ 500)과 realization을 쓴다(`em-uncertainty`).
+- ANCOM-BC2·ALDEx2·LinDA를 같은 설계로 맞춰 교차 확인한다(`da-robustness`, `da-resolutions`). 문구는 **"Robust across three complementary differential abundance frameworks"**만 쓰고 "Validated by three independent statistical methods"는 쓰지 않는다.
+
 ## 미결정 사항
-- `em-imputation`(`ace3467`)을 main에 병합할지, 두 브랜치를 푸시할지(사용자 결정 대기).
+- (해결) `em-imputation`(`ace3467`)은 main에 들어가 푸시됨: `origin/main` = `734c77e`.
+- MaAsLin 3(Nickols et al., Nat Methods 2026)을 `da-robustness`의 선택 방법으로 추가할지(2026-11-20 제안, 사용자 답 없음). 추가한다면 prevalence의 "있음" 기준(unique read ≥ 1 또는 EM 기대 read 하한)을 정해야 함. 제안: abundance 성분만 concordance에 넣고 `high_confidence` 규칙(세 방법)은 그대로.
 - 시뮬레이션 원 실행 폴더(23 GB) 보존 여부.
 - 변이체(strain) 수준 분석을 OSD18에 적용할지(도구는 main `4603112`로 구현됨; 현재 potexvirus-like 4개는 같은 종으로 합침).
 - 사용자 정정: OSD 연구는 **식물 3개체(P257, P262, P353)** × healthy/macho × 3 반복. DA 공식은 `condition + plant`.

@@ -1,8 +1,15 @@
-# resume — 현재 상태 (2026-11-23 10:00 PST 기준, 확인함)
+# resume — 현재 상태 (2026-11-25 기준; 아래 v2·시뮬레이션 절은 2026-11-23 확인분)
 
 관련 기록: [INTENTION.md](INTENTION.md) · [TODO.md](TODO.md) · [ISSUE.md](ISSUE.md) · [QUARANTINE.md](QUARANTINE.md) · [AGENTS.md](AGENTS.md) · [README.md](README.md)
 
-## 위치와 git
+## 2026-11-25 갱신
+- `origin/main` = `734c77e`(em-imputation `ace3467` 포함, 푸시됨). worktree `additional`(브랜치 `integrate`)도 이 위치로 fast-forward.
+- 전체 테스트 366 passed(`7c6ae6d`, 2026-11-24, 29분, 건너뛴 것 없음).
+- OSD18 robustness 확장 실행 중: ISSUE In Progress 1(host genome 경로 변경으로 첫 제출 실패 → 재제출 6331075–82).
+- 관련 별도 저장소: Centrifuger lab fork `plantgenomicslab/centrifuger`(tag `v1.2.0-pgl.1`, 상류 PR mourisl/centrifuger#114) — `centrifuger-quant`의 EM read count(emNumReads, `--em-reads`), protein index weight, kraken-report 합계 수정. 위키 `guide/centrifuger.md`.
+- Eli의 Opuntia microbiome pilot 데이터(`/data/gpfs/assoc/pgl/Eli/opuntia_microbiome/pilot_data/`, 원본 NL4CGS 40 샘플 + rerun KYZMNB 4 샘플) QC 진행 중: 출력 `unclassified_meta_test/eli_pilot/`.
+
+## 위치와 git (2026-11-23 기록)
 - 작업 worktree: `/mnt/f/scratch/develop/unclassified_meta-p257fix`, 브랜치 `em-imputation`, HEAD `ace3467`.
   - `origin/em-imputation`은 `cabe340`에 있다(로컬이 18 커밋 앞섬, **푸시 안 함**).
   - 미커밋: `TODO.md`, `resume.md`, `docs/reports/osd18_structural_zero/REPORT.md`('v2 실행 결과' 절), 이 핸드오프 갱신분.

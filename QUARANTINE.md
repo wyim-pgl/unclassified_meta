@@ -21,3 +21,7 @@ _최종 갱신: 2026-11-23. 현재 정본은 [resume.md](resume.md)와 `src/uncl
 | 2026-11-20 | OSD18 첫 배치의 `da_*_em/mi_results.tsv`(round-10 코드) | MI 결합 버그(p=1 fit 재검정) 이전 결과: RNA 종 q<0.05 242개 | `OSD18/<T>/repool_fix/`, v2 `da_*_em_sz/` |
 | 2026-11-20 | OSD18 첫 배치 LCA 표(`taxa_*_lca`, `--panel-taxonomy` 없음)로 EM과 비교 | EM 표와 패널 collapse 조건이 달라 비교에 섞임 | `taxa_*_lca_ptx`, v2 결과 |
 | 2026-11-20 | "새 EM 코드(main 속도 개선)는 이전 EM과 같은 표를 낸다" | OSD18에서 칸당 최대 1.65 리드 차이 관측 | ISSUE 3b |
+| 2026-11-19 | "Validated by three independent statistical methods" 문구 | 세 방법은 같은 데이터·같은 조성 가정을 공유해 독립이 아님(사용자 명세) | "Robust across three complementary differential abundance frameworks", `docs/DESIGN_robustness.md` |
+| 2026-11-20 | group term을 이름 접두어로 찾기 | group 이름으로 시작하는 다른 공변량의 term도 잡음 | `robustness.is_group_term`(model-matrix 열 이름 매칭, 7c6ae6d) |
+| 2026-11-20 | alpha와 무관한 mde_80 | `--alpha`를 바꿔도 최소 검출 효과가 그대로 | `robustness.z_mde80(alpha)` (7c6ae6d) |
+| 2026-11-25 | host genome 경로 `/data/gpfs/assoc/pgl/Eli/OSD/kraken2/input/Ococh_genome/Ococh_noHighGC.fa` | Eli가 `Eli/OSD/input/`으로 옮김(sha256 같음); robustness 잡 6328729–31·6328734–36이 이 때문에 실패 | `panel-build --host ococh=/data/gpfs/assoc/pgl/Eli/OSD/input/Ococh_noHighGC.fa` (`OSD18/rob_res.sbatch`) |
